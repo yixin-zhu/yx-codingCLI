@@ -1,7 +1,9 @@
 package com.agent.prompt;
 
 public enum PromptMode {
-    AGENT("modes/agent.md");
+    AGENT("modes/agent.md"),
+    PLAN("modes/plan.md"),
+    PLANNER("modes/planner.md");
 
     private final String resourcePath;
 

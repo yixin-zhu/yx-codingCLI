@@ -3,8 +3,10 @@ package com.agent;
 import com.agent.cli.CliCommandParser;
 import com.agent.cli.CliCommandParser.CommandType;
 import com.agent.cli.CliCommandParser.ParsedCommand;
+import com.agent.cli.PlanReviewInputParser;
 import com.agent.llm.LlmClient;
 import com.agent.llm.SimpleLlmClient;
+import com.agent.plan.ExecutionPlan;
 import com.agent.tool.ToolRegistry;
 
 import java.io.BufferedReader;
@@ -19,27 +21,27 @@ import java.nio.file.Paths;
 public class Main {
 
     private static Agent agent;
+    private static PlanExecuteAgent planAgent;
     private static ToolRegistry toolRegistry;
+    private static LlmClient llmClient;
+    private static BufferedReader inputReader;
     private static boolean running = true;
 
     public static void main(String[] args) {
         printBanner();
 
         try {
-            // 初始化组件
             String apiUrl = System.getenv().getOrDefault("LLM_API_URL", "https://api.deepseek.com");
             String apiKey = System.getenv().getOrDefault("LLM_API_KEY", "");
             String model = System.getenv().getOrDefault("LLM_MODEL", "deepseek-chat");
 
-            // 检查 API Key 配置
             if (apiKey.equals("sk-****") || apiKey.isBlank()) {
                 System.out.println("⚠️  警告: 未设置环境变量 LLM_API_KEY");
                 System.out.println("   请设置后重新运行: set LLM_API_KEY=your_api_key");
                 System.out.println();
                 System.out.println("   临时测试: java -Dllm.api.key=your_key -jar agentic-coding-agent.jar");
                 System.out.println();
-                
-                // 尝试从系统属性获取
+
                 String sysPropKey = System.getProperty("llm.api.key");
                 if (sysPropKey != null && !sysPropKey.isBlank()) {
                     apiKey = sysPropKey;
@@ -50,7 +52,6 @@ public class Main {
                 }
             }
 
-            // 从系统属性或环境变量覆盖
             String sysApiUrl = System.getProperty("llm.api.url");
             if (sysApiUrl != null && !sysApiUrl.isBlank()) {
                 apiUrl = sysApiUrl;
@@ -60,7 +61,6 @@ public class Main {
                 model = sysModel;
             }
 
-            // 确定工作目录（优先级：系统属性 > 环境变量 > 默认 user.dir）
             Path workspace = resolveWorkspace(args);
 
             System.out.println("配置信息:");
@@ -69,10 +69,10 @@ public class Main {
             System.out.println("  Workspace: " + workspace.toAbsolutePath().normalize());
             System.out.println();
 
-            // 初始化 LLM 客户端和工具注册表
-            LlmClient llmClient = new SimpleLlmClient(apiUrl, apiKey, model);
+            llmClient = new SimpleLlmClient(apiUrl, apiKey, model);
             toolRegistry = new ToolRegistry(workspace);
             agent = new Agent(llmClient, toolRegistry);
+            planAgent = new PlanExecuteAgent(llmClient, toolRegistry, Main::reviewPlan);
 
             System.out.println("✓ Agent 初始化完成");
             System.out.println("✓ 可用工具: " + agent.getAvailableTools());
@@ -81,7 +81,6 @@ public class Main {
             printHelp();
             printSeparator();
 
-            // 进入交互循环
             runInteractiveLoop();
 
         } catch (Exception e) {
@@ -91,15 +90,6 @@ public class Main {
         }
     }
 
-    /**
-     * 解析项目根目录（对齐 PaiCLI：启动时确定 project root，运行中不通过 Agent 工具切换）。
-     *
-     * 优先级：
-     * 1. 系统属性 -Dworkspace.path=...
-     * 2. 环境变量 AGENT_WORKSPACE
-     * 3. 命令行参数 --workspace / -w
-     * 4. 默认 ../agent-workspace（与 agentic-coding-agent 同级）；不存在则自动创建
-     */
     private static Path resolveWorkspace(String[] args) throws java.io.IOException {
         Path fromProperty = resolveWorkspaceFromProperty("workspace.path", System.getProperty("workspace.path"));
         if (fromProperty != null) {
@@ -151,10 +141,6 @@ public class Main {
         return null;
     }
 
-    /**
-     * 默认工作区：与 agentic-coding-agent 同级的 agent-workspace。
-     * 若从其他目录启动，则优先使用当前目录下的 agent-workspace。
-     */
     private static Path ensureDefaultWorkspace() throws java.io.IOException {
         Path cwd = Paths.get(System.getProperty("user.dir")).toAbsolutePath().normalize();
         Path candidate = cwd.getFileName() != null
@@ -168,11 +154,9 @@ public class Main {
         return candidate.toAbsolutePath().normalize();
     }
 
-    /**
-     * 交互式命令循环
-     */
     private static void runInteractiveLoop() {
         try (BufferedReader reader = new BufferedReader(new InputStreamReader(System.in))) {
+            inputReader = reader;
             while (running) {
                 System.out.print("🤖 > ");
                 System.out.flush();
@@ -187,7 +171,6 @@ public class Main {
                     continue;
                 }
 
-                // 处理命令
                 if (input.startsWith("/")) {
                     ParsedCommand command = CliCommandParser.parse(input);
                     if (command.type() == CommandType.NONE) {
@@ -197,7 +180,6 @@ public class Main {
                     continue;
                 }
 
-                // 执行 Agent
                 executeAgent(input);
                 printSeparator();
             }
@@ -208,9 +190,6 @@ public class Main {
         System.out.println("\n👋 再见！");
     }
 
-    /**
-     * 处理斜杠命令
-     */
     private static void handleCommand(ParsedCommand command) {
         switch (command.type()) {
             case EXIT -> {
@@ -242,15 +221,70 @@ public class Main {
                 System.out.println("当前项目根: " + toolRegistry.getProjectPath());
                 System.out.println("切换项目根请退出后重新启动，并指定 --workspace 或 AGENT_WORKSPACE。");
             }
+            case PLAN -> executePlan(command.payload());
             case UNKNOWN -> System.out.println("未知命令: " + command.payload() + "，输入 /help 查看所有命令");
             default -> {
             }
         }
     }
 
-    /**
-     * 执行 Agent 并显示结果
-     */
+    private static void executePlan(String goal) {
+        if (goal == null || goal.isBlank()) {
+            System.out.println("请提供计划任务，例如: /plan 创建 demo 项目，然后读取 pom.xml");
+            return;
+        }
+
+        System.out.println("\n📋 使用 Plan-and-Execute 模式\n");
+        try {
+            long startTime = System.currentTimeMillis();
+            String response = planAgent.run(goal);
+            long elapsed = System.currentTimeMillis() - startTime;
+
+            System.out.println("\n" + response);
+            System.out.printf("\n⏱️  耗时: %.1f 秒%n", elapsed / 1000.0);
+            printSeparator();
+        } catch (Exception e) {
+            System.err.println("\n❌ 计划执行失败: " + e.getMessage());
+        }
+    }
+
+    private static PlanExecuteAgent.PlanReviewDecision reviewPlan(String goal, ExecutionPlan plan) {
+        System.out.println(plan.summarize());
+        if (plan.getSummary() != null && !plan.getSummary().isBlank()) {
+            System.out.println("   - 摘要: " + plan.getSummary());
+        }
+        System.out.println("📝 计划已生成。");
+        System.out.println("   - 直接回车 或 输入 y：执行");
+        System.out.println("   - 输入 esc / cancel：取消");
+        System.out.println("   - 输入 /view：展开完整计划");
+        System.out.println("   - 其他文字：作为补充要求重新规划\n");
+
+        try {
+            while (true) {
+                System.out.print("操作> ");
+                System.out.flush();
+                String input = inputReader == null ? "" : inputReader.readLine();
+                if (input == null) {
+                    return PlanExecuteAgent.PlanReviewDecision.cancel();
+                }
+                if ("/view".equalsIgnoreCase(input.trim())) {
+                    System.out.println(plan.visualize());
+                    continue;
+                }
+
+                PlanReviewInputParser.Decision decision = PlanReviewInputParser.parse(input);
+                return switch (decision.type()) {
+                    case EXECUTE -> PlanExecuteAgent.PlanReviewDecision.execute();
+                    case CANCEL -> PlanExecuteAgent.PlanReviewDecision.cancel();
+                    case SUPPLEMENT -> PlanExecuteAgent.PlanReviewDecision.supplement(decision.feedback());
+                };
+            }
+        } catch (Exception e) {
+            System.err.println("❌ 计划审阅失败: " + e.getMessage());
+            return PlanExecuteAgent.PlanReviewDecision.cancel();
+        }
+    }
+
     private static void executeAgent(String userInput) {
         System.out.println("\n⏳ 思考中...");
 
@@ -267,12 +301,10 @@ public class Main {
         }
     }
 
-    // ==================== 显示辅助方法 ====================
-
     private static void printBanner() {
         System.out.println("╔══════════════════════════════════════════════════════════════╗");
-        System.out.println("║     Agentic Coding Agent - Phase 1.5 MVP                   ║");
-        System.out.println("║     基于 ReAct 模式的智能编码助手                           ║");
+        System.out.println("║     Agentic Coding Agent - Phase 2 MVP                     ║");
+        System.out.println("║     ReAct + Plan-and-Execute 智能编码助手                    ║");
         System.out.println("╚══════════════════════════════════════════════════════════════╝");
         System.out.println();
     }
@@ -285,6 +317,7 @@ public class Main {
         System.out.println("  /tools        查看可用工具");
         System.out.println("  /system       查看系统提示词");
         System.out.println("  /pwd          查看当前项目根");
+        System.out.println("  /plan <任务>  使用 Plan-and-Execute 模式执行复杂任务");
         System.out.println("  /exit         退出程序");
         System.out.println();
         System.out.println("项目根在启动时确定（对齐 PaiCLI，运行中不可通过 Agent 切换）:");
@@ -293,10 +326,10 @@ public class Main {
         System.out.println("  --workspace D:\\myproject");
         System.out.println("  环境变量: AGENT_WORKSPACE=D:\\myproject");
         System.out.println();
-        System.out.println("直接输入文本即可与 Agent 对话，例如:");
+        System.out.println("直接输入文本走 ReAct 模式，例如:");
         System.out.println("  \"读取当前目录的文件列表\"");
-        System.out.println("  \"创建一个 Hello.java 文件\"");
-        System.out.println("  \"执行 dir 命令\"");
+        System.out.println("复杂多步任务请用 /plan，例如:");
+        System.out.println("  /plan 创建 demo 项目，然后读取 pom.xml，最后验证项目结构");
     }
 
     private static void printSeparator() {

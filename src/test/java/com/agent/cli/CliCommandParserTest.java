@@ -12,6 +12,7 @@ class CliCommandParserTest {
         assertEquals(CliCommandParser.CommandType.RESET, CliCommandParser.parse("/reset").type());
         assertEquals(CliCommandParser.CommandType.HELP, CliCommandParser.parse("/help").type());
         assertEquals(CliCommandParser.CommandType.PWD, CliCommandParser.parse("/pwd").type());
+        assertEquals(CliCommandParser.CommandType.PLAN, CliCommandParser.parse("/plan demo").type());
     }
 
     @Test

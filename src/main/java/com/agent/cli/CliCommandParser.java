@@ -14,7 +14,8 @@ public final class CliCommandParser {
         HISTORY,
         TOOLS,
         SYSTEM,
-        PWD
+        PWD,
+        PLAN
     }
 
     public record ParsedCommand(CommandType type, String payload) {
@@ -47,6 +48,7 @@ public final class CliCommandParser {
             case "/tools" -> new ParsedCommand(CommandType.TOOLS, payload);
             case "/system" -> new ParsedCommand(CommandType.SYSTEM, payload);
             case "/pwd" -> new ParsedCommand(CommandType.PWD, payload);
+            case "/plan" -> new ParsedCommand(CommandType.PLAN, payload);
             default -> trimmed.startsWith("/")
                     ? new ParsedCommand(CommandType.UNKNOWN, trimmed)
                     : ParsedCommand.none();
