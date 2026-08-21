@@ -40,7 +40,12 @@ class AgentTest {
         assertTrue(tools.contains("read_file"), "read_file 工具应已注册");
         assertTrue(tools.contains("write_file"), "write_file 工具应已注册");
         assertTrue(tools.contains("list_dir"), "list_dir 工具应已注册");
+        assertTrue(tools.contains("glob_files"), "glob_files 工具应已注册");
+        assertTrue(tools.contains("grep_code"), "grep_code 工具应已注册");
         assertTrue(tools.contains("execute_command"), "execute_command 工具应已注册");
+        assertTrue(tools.contains("create_project"), "create_project 工具应已注册");
+        
+        assertEquals(7, tools.size());
         
         System.out.println("✓ 已注册工具: " + tools);
     }
@@ -216,8 +221,48 @@ class AgentTest {
         var results = toolRegistry.executeTools(invocations);
 
         // 应该被拒绝
-        assertTrue(results.get(0).result().contains("错误") || results.get(0).result().contains("路径"));
+        assertTrue(results.get(0).result().contains("策略拒绝") || results.get(0).result().contains("路径"));
         System.out.println("✓ 路径安全测试通过");
+    }
+
+    @Test
+    @Order(61)
+    @DisplayName("测试 glob_files - 查找 java 文件")
+    void testGlobFiles() throws IOException {
+        Path src = tempDir.resolve("src");
+        Files.createDirectories(src);
+        Files.writeString(src.resolve("Hello.java"), "class Hello {}");
+
+        var results = toolRegistry.executeTools(List.of(
+                new ToolRegistry.ToolInvocation("g1", "glob_files", "{\"pattern\":\"**/*.java\"}")
+        ));
+
+        assertTrue(results.get(0).result().contains("Hello.java"));
+    }
+
+    @Test
+    @Order(62)
+    @DisplayName("测试 grep_code - 搜索关键字")
+    void testGrepCode() throws IOException {
+        Files.writeString(tempDir.resolve("Demo.java"), "public class Demo { void run() {} }");
+
+        var results = toolRegistry.executeTools(List.of(
+                new ToolRegistry.ToolInvocation("grep1", "grep_code", "{\"pattern\":\"class Demo\"}")
+        ));
+
+        assertTrue(results.get(0).result().contains("Demo.java"));
+    }
+
+    @Test
+    @Order(63)
+    @DisplayName("测试 create_project - 创建 Java 项目")
+    void testCreateProject() {
+        var results = toolRegistry.executeTools(List.of(
+                new ToolRegistry.ToolInvocation("p1", "create_project", "{\"name\":\"hello\",\"type\":\"java\"}")
+        ));
+
+        assertTrue(results.get(0).result().contains("项目已创建"));
+        assertTrue(Files.exists(tempDir.resolve("hello/pom.xml")));
     }
 
     // ==================== Agent 基本功能测试 ====================

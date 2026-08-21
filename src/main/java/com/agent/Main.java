@@ -1,5 +1,8 @@
 package com.agent;
 
+import com.agent.cli.CliCommandParser;
+import com.agent.cli.CliCommandParser.CommandType;
+import com.agent.cli.CliCommandParser.ParsedCommand;
 import com.agent.llm.LlmClient;
 import com.agent.llm.SimpleLlmClient;
 import com.agent.tool.ToolRegistry;
@@ -186,7 +189,11 @@ public class Main {
 
                 // 处理命令
                 if (input.startsWith("/")) {
-                    handleCommand(input);
+                    ParsedCommand command = CliCommandParser.parse(input);
+                    if (command.type() == CommandType.NONE) {
+                        continue;
+                    }
+                    handleCommand(command);
                     continue;
                 }
 
@@ -204,44 +211,40 @@ public class Main {
     /**
      * 处理斜杠命令
      */
-    private static void handleCommand(String input) {
-        String[] parts = input.split("\\s+", 2);
-        String command = parts[0].toLowerCase();
-        String payload = parts.length > 1 ? parts[1] : null;
-
-        switch (command) {
-            case "/exit", "/quit", "/q" -> {
+    private static void handleCommand(ParsedCommand command) {
+        switch (command.type()) {
+            case EXIT -> {
                 System.out.println("👋 再见！");
                 running = false;
             }
-            case "/reset" -> {
+            case RESET -> {
                 agent.reset();
                 System.out.println("✓ 对话历史已重置");
             }
-            case "/help", "/?" -> printHelp();
-            case "/history" -> {
+            case HELP -> printHelp();
+            case HISTORY -> {
                 var history = agent.getConversationHistory();
                 System.out.println("对话历史 (" + history.size() + " 条消息):");
                 for (int i = 0; i < history.size(); i++) {
                     var msg = history.get(i);
-                    String preview = msg.content() != null 
+                    String preview = msg.content() != null
                             ? (msg.content().length() > 80 ? msg.content().substring(0, 80) + "..." : msg.content())
                             : "(无内容)";
                     System.out.printf("  [%d] %s: %s%n", i, msg.role(), preview);
                 }
             }
-            case "/tools" -> {
-                System.out.println("可用工具: " + agent.getAvailableTools());
-            }
-            case "/system" -> {
+            case TOOLS -> System.out.println("可用工具: " + agent.getAvailableTools());
+            case SYSTEM -> {
                 System.out.println("系统提示词:");
                 System.out.println(agent.getSystemPrompt());
             }
-            case "/pwd" -> {
+            case PWD -> {
                 System.out.println("当前项目根: " + toolRegistry.getProjectPath());
                 System.out.println("切换项目根请退出后重新启动，并指定 --workspace 或 AGENT_WORKSPACE。");
             }
-            default -> System.out.println("未知命令: " + command + "，输入 /help 查看所有命令");
+            case UNKNOWN -> System.out.println("未知命令: " + command.payload() + "，输入 /help 查看所有命令");
+            default -> {
+            }
         }
     }
 
