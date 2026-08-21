@@ -271,7 +271,7 @@ public class Main {
 
     private static void printBanner() {
         System.out.println("╔══════════════════════════════════════════════════════════════╗");
-        System.out.println("║     Agentic Coding Agent - Phase 1 MVP                     ║");
+        System.out.println("║     Agentic Coding Agent - Phase 1.5 MVP                   ║");
         System.out.println("║     基于 ReAct 模式的智能编码助手                           ║");
         System.out.println("╚══════════════════════════════════════════════════════════════╝");
         System.out.println();
