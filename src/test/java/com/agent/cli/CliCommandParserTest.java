@@ -14,6 +14,8 @@ class CliCommandParserTest {
         assertEquals(CliCommandParser.CommandType.PWD, CliCommandParser.parse("/pwd").type());
         assertEquals(CliCommandParser.CommandType.PLAN, CliCommandParser.parse("/plan demo").type());
         assertEquals(CliCommandParser.CommandType.TEAM, CliCommandParser.parse("/team demo").type());
+        assertEquals(CliCommandParser.CommandType.HITL_ON, CliCommandParser.parse("/hitl on").type());
+        assertEquals(CliCommandParser.CommandType.AUDIT, CliCommandParser.parse("/audit 5").type());
         assertEquals(CliCommandParser.CommandType.SAVE, CliCommandParser.parse("/save fact").type());
         assertEquals(CliCommandParser.CommandType.MEMORY_LIST, CliCommandParser.parse("/memory list").type());
     }

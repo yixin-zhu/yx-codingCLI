@@ -17,6 +17,10 @@ public final class CliCommandParser {
         PWD,
         PLAN,
         TEAM,
+        HITL_STATUS,
+        HITL_ON,
+        HITL_OFF,
+        AUDIT,
         SAVE,
         MEMORY_STATUS,
         MEMORY_LIST,
@@ -70,6 +74,21 @@ public final class CliCommandParser {
         }
         if (lower.startsWith("/save ")) {
             return new ParsedCommand(CommandType.SAVE, trimmed.substring(6).trim());
+        }
+        if (lower.equals("/hitl")) {
+            return new ParsedCommand(CommandType.HITL_STATUS, null);
+        }
+        if (lower.equals("/hitl on")) {
+            return new ParsedCommand(CommandType.HITL_ON, null);
+        }
+        if (lower.equals("/hitl off")) {
+            return new ParsedCommand(CommandType.HITL_OFF, null);
+        }
+        if (lower.equals("/audit")) {
+            return new ParsedCommand(CommandType.AUDIT, null);
+        }
+        if (lower.startsWith("/audit ")) {
+            return new ParsedCommand(CommandType.AUDIT, trimmed.substring(7).trim());
         }
 
         String[] parts = trimmed.split("\\s+", 2);

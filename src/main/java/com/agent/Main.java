@@ -6,9 +6,12 @@ import com.agent.cli.CliCommandParser.ParsedCommand;
 import com.agent.cli.PlanReviewInputParser;
 import com.agent.llm.LlmClient;
 import com.agent.llm.SimpleLlmClient;
+import com.agent.hitl.HitlToolRegistry;
+import com.agent.hitl.TerminalHitlHandler;
 import com.agent.memory.MemoryEntry;
 import com.agent.memory.MemoryManager;
 import com.agent.plan.ExecutionPlan;
+import com.agent.policy.AuditLog;
 import com.agent.tool.ToolRegistry;
 
 import java.io.BufferedReader;
@@ -26,6 +29,7 @@ public class Main {
     private static PlanExecuteAgent planAgent;
     private static AgentOrchestrator teamAgent;
     private static ToolRegistry toolRegistry;
+    private static TerminalHitlHandler hitlHandler;
     private static LlmClient llmClient;
     private static BufferedReader inputReader;
     private static boolean running = true;
@@ -73,7 +77,8 @@ public class Main {
             System.out.println();
 
             llmClient = new SimpleLlmClient(apiUrl, apiKey, model);
-            toolRegistry = new ToolRegistry(workspace);
+            hitlHandler = new TerminalHitlHandler(false);
+            toolRegistry = new HitlToolRegistry(hitlHandler, workspace);
             agent = new Agent(llmClient, toolRegistry);
             planAgent = new PlanExecuteAgent(llmClient, toolRegistry, Main::reviewPlan);
             teamAgent = new AgentOrchestrator(llmClient, toolRegistry, agent.getMemoryManager());
@@ -227,6 +232,10 @@ public class Main {
             }
             case PLAN -> executePlan(command.payload());
             case TEAM -> executeTeam(command.payload());
+            case HITL_STATUS -> printHitlStatus();
+            case HITL_ON -> setHitlEnabled(true);
+            case HITL_OFF -> setHitlEnabled(false);
+            case AUDIT -> printAudit(command.payload());
             case SAVE -> handleSave(command.payload());
             case MEMORY_STATUS -> System.out.println(agent.getMemoryManager().getSystemStatus());
             case MEMORY_LIST -> printMemoryList(agent.getMemoryManager().listLongTerm());
@@ -287,6 +296,46 @@ public class Main {
                     entry.getId(),
                     entry.getContent(),
                     entry.getMetadata().getOrDefault("scope", "global"));
+        }
+    }
+
+    private static void setHitlEnabled(boolean enabled) {
+        hitlHandler.setEnabled(enabled);
+        if (!enabled) {
+            hitlHandler.clearApprovedAll();
+        }
+        System.out.println(enabled ? "✓ HITL 审批已开启" : "✓ HITL 审批已关闭（已清空全部放行缓存）");
+    }
+
+    private static void printHitlStatus() {
+        System.out.println("HITL 状态: " + (hitlHandler.isEnabled() ? "开启" : "关闭"));
+        System.out.println("危险工具: write_file / execute_command / create_project");
+        System.out.println("用法: /hitl on | /hitl off");
+    }
+
+    private static void printAudit(String payload) {
+        int limit = 10;
+        if (payload != null && !payload.isBlank()) {
+            try {
+                limit = Integer.parseInt(payload.trim());
+            } catch (NumberFormatException ignored) {
+            }
+        }
+        java.util.List<AuditLog.AuditEntry> entries = toolRegistry.getAuditLog().readRecent(limit);
+        if (entries.isEmpty()) {
+            System.out.println("（今日暂无审计记录）");
+            return;
+        }
+        for (AuditLog.AuditEntry entry : entries) {
+            System.out.printf("[%s] %s %s (%dms, approver=%s)%n",
+                    entry.outcome().toUpperCase(),
+                    entry.timestamp(),
+                    entry.tool(),
+                    entry.durationMs(),
+                    entry.approver());
+            if (entry.reason() != null && !entry.reason().isBlank()) {
+                System.out.println("        原因: " + entry.reason());
+            }
         }
     }
 
@@ -385,8 +434,8 @@ public class Main {
 
     private static void printBanner() {
         System.out.println("╔══════════════════════════════════════════════════════════════╗");
-        System.out.println("║     Agentic Coding Agent - Phase 5 MVP                     ║");
-        System.out.println("║     ReAct + Plan + Memory + Multi-Agent 智能编码助手         ║");
+        System.out.println("║     Agentic Coding Agent - Phase 6 MVP                     ║");
+        System.out.println("║     ReAct + Plan + Memory + Multi-Agent + HITL 智能编码助手  ║");
         System.out.println("╚══════════════════════════════════════════════════════════════╝");
         System.out.println();
     }
@@ -401,6 +450,8 @@ public class Main {
         System.out.println("  /pwd          查看当前项目根");
         System.out.println("  /plan <任务>  使用 Plan-and-Execute 模式执行复杂任务");
         System.out.println("  /team <任务>  使用 Multi-Agent 协作（规划/执行/审查）");
+        System.out.println("  /hitl on|off  开启/关闭危险工具人工审批（默认关闭）");
+        System.out.println("  /audit [N]    查看今日最近 N 条审计记录");
         System.out.println("  /save <事实>  手动保存长期记忆（/save --global 保存跨项目偏好）");
         System.out.println("  /memory       查看记忆系统状态");
         System.out.println("  /memory list/search/delete/clear  管理长期记忆");

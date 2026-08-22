@@ -1,6 +1,8 @@
 package com.agent.tool;
 
 import com.agent.llm.LlmClient;
+import com.agent.policy.AuditLog;
+import com.agent.policy.CommandGuard;
 import com.agent.policy.PathGuard;
 import com.agent.policy.PolicyException;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -37,6 +39,7 @@ public class ToolRegistry {
     private static final Logger log = LoggerFactory.getLogger(ToolRegistry.class);
 
     private final Map<String, Tool> tools = new LinkedHashMap<>();
+    private final AuditLog auditLog = new AuditLog();
     private Path workingDirectory;
     private PathGuard pathGuard;
     private FileTools fileTools;
@@ -156,6 +159,11 @@ public class ToolRegistry {
                     String command = args.get("command");
                     int timeout = parseInt(args.get("timeout"), 30);
                     log.info("执行命令: {}", command);
+
+                    String denyReason = CommandGuard.check(command);
+                    if (denyReason != null) {
+                        throw new PolicyException(denyReason);
+                    }
 
                     String os = System.getProperty("os.name").toLowerCase(Locale.ROOT);
                     ProcessBuilder pb = os.contains("win")
@@ -284,7 +292,11 @@ public class ToolRegistry {
         return results;
     }
 
-    private ToolExecutionResult executeTool(ToolInvocation invocation) {
+    protected ToolExecutionResult executeTool(ToolInvocation invocation) {
+        return doExecuteTool(invocation);
+    }
+
+    protected ToolExecutionResult doExecuteTool(ToolInvocation invocation) {
         long startTime = System.currentTimeMillis();
         try {
             Tool tool = tools.get(invocation.name());
@@ -299,27 +311,56 @@ public class ToolRegistry {
             Map<String, String> args = parseArguments(invocation.argumentsJson());
             log.debug("执行工具 {} with args: {}", invocation.name(), args);
             String result = tool.executor().execute(args);
-            return new ToolExecutionResult(
-                    invocation.id(), invocation.name(), result, System.currentTimeMillis() - startTime);
+            long elapsed = System.currentTimeMillis() - startTime;
+            if (ApprovalPolicyHelper.shouldAudit(invocation.name())) {
+                auditLog.record(AuditLog.AuditEntry.allow(
+                        invocation.name(), invocation.argumentsJson(), elapsed));
+            }
+            return new ToolExecutionResult(invocation.id(), invocation.name(), result, elapsed);
         } catch (PolicyException e) {
+            long elapsed = System.currentTimeMillis() - startTime;
+            if (ApprovalPolicyHelper.shouldAudit(invocation.name())) {
+                auditLog.record(AuditLog.AuditEntry.denyByPolicy(
+                        invocation.name(), invocation.argumentsJson(), e.getMessage(), elapsed));
+            }
             return new ToolExecutionResult(
                     invocation.id(),
                     invocation.name(),
                     "🛡️ 策略拒绝: " + e.getMessage(),
-                    System.currentTimeMillis() - startTime
+                    elapsed
             );
         } catch (Exception e) {
             log.error("工具执行异常: {}", invocation.name(), e);
+            long elapsed = System.currentTimeMillis() - startTime;
+            if (ApprovalPolicyHelper.shouldAudit(invocation.name())) {
+                auditLog.record(AuditLog.AuditEntry.error(
+                        invocation.name(), invocation.argumentsJson(), e.getMessage(), elapsed));
+            }
             return new ToolExecutionResult(
                     invocation.id(),
                     invocation.name(),
                     "工具执行异常: " + e.getMessage(),
-                    System.currentTimeMillis() - startTime
+                    elapsed
             );
         }
     }
 
-    private Map<String, String> parseArguments(String argumentsJson) {
+    public AuditLog getAuditLog() {
+        return auditLog;
+    }
+
+    /**
+     * 避免 ToolRegistry 依赖 hitl 包。
+     */
+    private static final class ApprovalPolicyHelper {
+        private static boolean shouldAudit(String toolName) {
+            return "write_file".equals(toolName)
+                    || "execute_command".equals(toolName)
+                    || "create_project".equals(toolName);
+        }
+    }
+
+    protected Map<String, String> parseArguments(String argumentsJson) {
         Map<String, String> args = new HashMap<>();
         if (argumentsJson == null || argumentsJson.isBlank()) {
             return args;
