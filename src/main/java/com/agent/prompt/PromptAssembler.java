@@ -6,7 +6,7 @@ import java.util.Map;
 import java.util.Objects;
 
 /**
- * 按固定顺序组装 system prompt：base → mode → runtime_context。
+ * 按固定顺序组装 system prompt：base → mode → project/memory → runtime_context。
  */
 public class PromptAssembler {
 
@@ -30,6 +30,8 @@ public class PromptAssembler {
         StringBuilder prompt = new StringBuilder();
         append(prompt, base);
         append(prompt, applyVariables(repository.loadRequired(mode.resourcePath()), ctx));
+        append(prompt, dynamicSection("Project Context", ctx.projectMemoryContext()));
+        append(prompt, ctx.memoryContext());
         append(prompt, runtimeContext(ctx));
 
         String assembled = prompt.toString().trim();
@@ -52,6 +54,16 @@ public class PromptAssembler {
             result = result.replace("{{" + entry.getKey() + "}}", entry.getValue());
         }
         return result;
+    }
+
+    private static String dynamicSection(String title, String value) {
+        if (value == null || value.isBlank()) {
+            return "";
+        }
+        if (value.contains("## ")) {
+            return value.trim();
+        }
+        return "## " + title + "\n\n" + value.trim();
     }
 
     private static void append(StringBuilder sb, String section) {

@@ -15,7 +15,13 @@ public final class CliCommandParser {
         TOOLS,
         SYSTEM,
         PWD,
-        PLAN
+        PLAN,
+        SAVE,
+        MEMORY_STATUS,
+        MEMORY_LIST,
+        MEMORY_SEARCH,
+        MEMORY_DELETE,
+        MEMORY_CLEAR
     }
 
     public record ParsedCommand(CommandType type, String payload) {
@@ -34,6 +40,35 @@ public final class CliCommandParser {
         String trimmed = input.trim();
         if (trimmed.isEmpty()) {
             return ParsedCommand.none();
+        }
+
+        String lower = trimmed.toLowerCase();
+        if (lower.equals("/memory") || lower.equals("/mem")) {
+            return new ParsedCommand(CommandType.MEMORY_STATUS, null);
+        }
+        if (lower.equals("/memory clear") || lower.equals("/mem clear")) {
+            return new ParsedCommand(CommandType.MEMORY_CLEAR, null);
+        }
+        if (lower.equals("/memory list") || lower.equals("/mem list")) {
+            return new ParsedCommand(CommandType.MEMORY_LIST, null);
+        }
+        if (lower.startsWith("/memory delete ")) {
+            return new ParsedCommand(CommandType.MEMORY_DELETE, trimmed.substring(15).trim());
+        }
+        if (lower.startsWith("/mem delete ")) {
+            return new ParsedCommand(CommandType.MEMORY_DELETE, trimmed.substring(12).trim());
+        }
+        if (lower.startsWith("/memory search ")) {
+            return new ParsedCommand(CommandType.MEMORY_SEARCH, trimmed.substring(15).trim());
+        }
+        if (lower.startsWith("/mem search ")) {
+            return new ParsedCommand(CommandType.MEMORY_SEARCH, trimmed.substring(12).trim());
+        }
+        if (lower.equals("/save")) {
+            return new ParsedCommand(CommandType.SAVE, null);
+        }
+        if (lower.startsWith("/save ")) {
+            return new ParsedCommand(CommandType.SAVE, trimmed.substring(6).trim());
         }
 
         String[] parts = trimmed.split("\\s+", 2);

@@ -6,6 +6,8 @@ import com.agent.cli.CliCommandParser.ParsedCommand;
 import com.agent.cli.PlanReviewInputParser;
 import com.agent.llm.LlmClient;
 import com.agent.llm.SimpleLlmClient;
+import com.agent.memory.MemoryEntry;
+import com.agent.memory.MemoryManager;
 import com.agent.plan.ExecutionPlan;
 import com.agent.tool.ToolRegistry;
 
@@ -222,9 +224,66 @@ public class Main {
                 System.out.println("切换项目根请退出后重新启动，并指定 --workspace 或 AGENT_WORKSPACE。");
             }
             case PLAN -> executePlan(command.payload());
+            case SAVE -> handleSave(command.payload());
+            case MEMORY_STATUS -> System.out.println(agent.getMemoryManager().getSystemStatus());
+            case MEMORY_LIST -> printMemoryList(agent.getMemoryManager().listLongTerm());
+            case MEMORY_SEARCH -> handleMemorySearch(command.payload());
+            case MEMORY_DELETE -> handleMemoryDelete(command.payload());
+            case MEMORY_CLEAR -> {
+                agent.getMemoryManager().clearLongTerm();
+                System.out.println("✓ 长期记忆已清空");
+            }
             case UNKNOWN -> System.out.println("未知命令: " + command.payload() + "，输入 /help 查看所有命令");
             default -> {
             }
+        }
+    }
+
+    private static void handleSave(String payload) {
+        if (payload == null || payload.isBlank()) {
+            System.out.println("用法: /save <事实>  或  /save --global <事实>");
+            return;
+        }
+        MemoryManager memoryManager = agent.getMemoryManager();
+        if (payload.startsWith("--global ")) {
+            memoryManager.storeFact(payload.substring("--global ".length()).trim(), "global");
+            System.out.println("✓ 已保存到 global 长期记忆");
+            return;
+        }
+        memoryManager.storeFact(payload.trim(), "project");
+        System.out.println("✓ 已保存到 project 长期记忆");
+    }
+
+    private static void handleMemorySearch(String query) {
+        if (query == null || query.isBlank()) {
+            System.out.println("用法: /memory search <关键词>");
+            return;
+        }
+        printMemoryList(agent.getMemoryManager().searchLongTerm(query, 20));
+    }
+
+    private static void handleMemoryDelete(String id) {
+        if (id == null || id.isBlank()) {
+            System.out.println("用法: /memory delete <id>");
+            return;
+        }
+        if (agent.getMemoryManager().deleteLongTerm(id)) {
+            System.out.println("✓ 已删除记忆: " + id);
+        } else {
+            System.out.println("未找到记忆: " + id);
+        }
+    }
+
+    private static void printMemoryList(java.util.List<MemoryEntry> entries) {
+        if (entries.isEmpty()) {
+            System.out.println("（无长期记忆）");
+            return;
+        }
+        for (MemoryEntry entry : entries) {
+            System.out.printf("  [%s] %s (%s)%n",
+                    entry.getId(),
+                    entry.getContent(),
+                    entry.getMetadata().getOrDefault("scope", "global"));
         }
     }
 
@@ -303,8 +362,8 @@ public class Main {
 
     private static void printBanner() {
         System.out.println("╔══════════════════════════════════════════════════════════════╗");
-        System.out.println("║     Agentic Coding Agent - Phase 2 MVP                     ║");
-        System.out.println("║     ReAct + Plan-and-Execute 智能编码助手                    ║");
+        System.out.println("║     Agentic Coding Agent - Phase 3 MVP                     ║");
+        System.out.println("║     ReAct + Plan + Memory 智能编码助手                       ║");
         System.out.println("╚══════════════════════════════════════════════════════════════╝");
         System.out.println();
     }
@@ -318,6 +377,9 @@ public class Main {
         System.out.println("  /system       查看系统提示词");
         System.out.println("  /pwd          查看当前项目根");
         System.out.println("  /plan <任务>  使用 Plan-and-Execute 模式执行复杂任务");
+        System.out.println("  /save <事实>  手动保存长期记忆（/save --global 保存跨项目偏好）");
+        System.out.println("  /memory       查看记忆系统状态");
+        System.out.println("  /memory list/search/delete/clear  管理长期记忆");
         System.out.println("  /exit         退出程序");
         System.out.println();
         System.out.println("项目根在启动时确定（对齐 PaiCLI，运行中不可通过 Agent 切换）:");

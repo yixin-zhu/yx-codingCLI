@@ -1,0 +1,89 @@
+package com.agent.memory;
+
+import com.agent.llm.LlmClient;
+
+import java.util.List;
+
+public class TokenBudget {
+
+    private static final int DEFAULT_CONTEXT_WINDOW = 128_000;
+    private static final int DEFAULT_SYSTEM_RESERVE = 500;
+    private static final int DEFAULT_TOOLS_RESERVE = 800;
+    private static final int DEFAULT_RESPONSE_RESERVE = 2_000;
+
+    private final int contextWindow;
+    private final int reservedForSystem;
+    private final int reservedForTools;
+    private final int reservedForResponse;
+
+    private int totalInputTokens;
+    private int totalOutputTokens;
+    private int llmCallCount;
+
+    public TokenBudget(int contextWindow) {
+        this(contextWindow, DEFAULT_SYSTEM_RESERVE, DEFAULT_TOOLS_RESERVE, DEFAULT_RESPONSE_RESERVE);
+    }
+
+    public TokenBudget(int contextWindow, int reservedForSystem, int reservedForTools, int reservedForResponse) {
+        this.contextWindow = contextWindow;
+        this.reservedForSystem = reservedForSystem;
+        this.reservedForTools = reservedForTools;
+        this.reservedForResponse = reservedForResponse;
+    }
+
+    public static TokenBudget defaults() {
+        return new TokenBudget(DEFAULT_CONTEXT_WINDOW);
+    }
+
+    public int getAvailableForConversation() {
+        return contextWindow - reservedForSystem - reservedForTools - reservedForResponse;
+    }
+
+    public boolean needsCompression(ConversationMemory memory, double triggerRatio) {
+        int compressionBudget = Math.min(memory.getMaxTokens(), getAvailableForConversation());
+        return memory.getTokenCount() >= compressionBudget * triggerRatio;
+    }
+
+    public void recordUsage(int inputTokens, int outputTokens) {
+        totalInputTokens += inputTokens;
+        totalOutputTokens += outputTokens;
+        llmCallCount++;
+    }
+
+    public int getCompressionTriggerTokens() {
+        return (int) (getAvailableForConversation() * 0.835);
+    }
+
+    public int getMemoryContextTokens() {
+        return 2_048;
+    }
+
+    public String getUsageReport() {
+        return String.format(
+                "Token 统计: 调用 %d 次 | 总输入: %d | 总输出: %d | 预算: %d (可用: %d)",
+                llmCallCount, totalInputTokens, totalOutputTokens,
+                contextWindow, getAvailableForConversation()
+        );
+    }
+
+    public int getContextWindow() {
+        return contextWindow;
+    }
+
+    public static int estimateMessagesTokens(List<LlmClient.Message> messages) {
+        if (messages == null) {
+            return 0;
+        }
+        int total = 0;
+        for (LlmClient.Message msg : messages) {
+            total += MemoryEntry.estimateTokens(msg.content());
+            if (msg.toolCalls() != null) {
+                for (LlmClient.ToolCall toolCall : msg.toolCalls()) {
+                    total += MemoryEntry.estimateTokens(toolCall.arguments());
+                }
+            }
+        }
+        total += messages.size() * 4;
+        return total;
+    }
+}

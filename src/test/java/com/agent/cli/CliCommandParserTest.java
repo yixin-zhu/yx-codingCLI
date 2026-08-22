@@ -13,6 +13,8 @@ class CliCommandParserTest {
         assertEquals(CliCommandParser.CommandType.HELP, CliCommandParser.parse("/help").type());
         assertEquals(CliCommandParser.CommandType.PWD, CliCommandParser.parse("/pwd").type());
         assertEquals(CliCommandParser.CommandType.PLAN, CliCommandParser.parse("/plan demo").type());
+        assertEquals(CliCommandParser.CommandType.SAVE, CliCommandParser.parse("/save fact").type());
+        assertEquals(CliCommandParser.CommandType.MEMORY_LIST, CliCommandParser.parse("/memory list").type());
     }
 
     @Test

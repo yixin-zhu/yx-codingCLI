@@ -22,6 +22,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.function.BiConsumer;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
@@ -39,6 +40,7 @@ public class ToolRegistry {
     private Path workingDirectory;
     private PathGuard pathGuard;
     private FileTools fileTools;
+    private BiConsumer<String, String> memorySaver;
 
     record Tool(String name, String description, JsonNode parameters, ToolExecutor executor) {}
 
@@ -70,6 +72,7 @@ public class ToolRegistry {
         registerGrepCode();
         registerExecuteCommand();
         registerCreateProject();
+        registerSaveMemory();
     }
 
     private void registerReadFile() {
@@ -225,6 +228,33 @@ public class ToolRegistry {
                     return "项目已创建: " + name + " (类型: " + type + ")";
                 }
         ));
+    }
+
+    private void registerSaveMemory() {
+        registerTool(new Tool(
+                "save_memory",
+                "当用户明确说“记一下”“记住”“以后记得”或要求保存长期偏好/稳定事实时调用；scope 默认 project，跨项目偏好才用 global。",
+                createParameters(
+                        new Param("fact", "string", "要长期保存的稳定事实或用户偏好", true),
+                        new Param("scope", "string", "记忆作用域：project 或 global，默认 project", false)
+                ),
+                args -> {
+                    String fact = args.get("fact");
+                    if (fact == null || fact.isBlank()) {
+                        return "保存长期记忆失败: fact 不能为空";
+                    }
+                    if (memorySaver == null) {
+                        return "保存长期记忆失败: 记忆保存器未初始化";
+                    }
+                    String scope = "global".equalsIgnoreCase(args.get("scope")) ? "global" : "project";
+                    memorySaver.accept(fact.trim(), scope);
+                    return "💾 已保存到长期记忆(" + scope + "): " + fact.trim();
+                }
+        ));
+    }
+
+    public void setMemorySaver(BiConsumer<String, String> memorySaver) {
+        this.memorySaver = memorySaver;
     }
 
     public void registerTool(Tool tool) {

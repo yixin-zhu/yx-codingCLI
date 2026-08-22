@@ -44,8 +44,9 @@ class AgentTest {
         assertTrue(tools.contains("grep_code"), "grep_code 工具应已注册");
         assertTrue(tools.contains("execute_command"), "execute_command 工具应已注册");
         assertTrue(tools.contains("create_project"), "create_project 工具应已注册");
+        assertTrue(tools.contains("save_memory"), "save_memory 工具应已注册");
         
-        assertEquals(7, tools.size());
+        assertEquals(8, tools.size());
         
         System.out.println("✓ 已注册工具: " + tools);
     }
