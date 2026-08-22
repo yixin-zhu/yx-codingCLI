@@ -20,6 +20,8 @@ class CliCommandParserTest {
         assertEquals(CliCommandParser.CommandType.CONTEXT_STATUS, CliCommandParser.parse("/context").type());
         assertEquals(CliCommandParser.CommandType.CONTEXT_STATUS, CliCommandParser.parse("/ctx").type());
         assertEquals(CliCommandParser.CommandType.MEMORY_LIST, CliCommandParser.parse("/memory list").type());
+        assertEquals(CliCommandParser.CommandType.SKILL_LIST, CliCommandParser.parse("/skill").type());
+        assertEquals(CliCommandParser.CommandType.SKILL_SHOW, CliCommandParser.parse("/skill show web-access").type());
         assertEquals(CliCommandParser.CommandType.MCP_LIST, CliCommandParser.parse("/mcp").type());
         assertEquals(CliCommandParser.CommandType.MCP_RESOURCES, CliCommandParser.parse("/mcp resources echo").type());
     }

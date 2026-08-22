@@ -9,6 +9,9 @@ import com.agent.project.AgentMdLoader;
 import com.agent.prompt.PromptAssembler;
 import com.agent.prompt.PromptContext;
 import com.agent.prompt.PromptMode;
+import com.agent.skill.SkillContextBuffer;
+import com.agent.skill.SkillIndexFormatter;
+import com.agent.skill.SkillRegistry;
 import com.agent.tool.ToolRegistry;
 
 import java.nio.file.Path;
@@ -29,6 +32,8 @@ public class Agent {
     private final ConversationHistoryCompactor historyCompactor;
     private final List<LlmClient.Message> conversationHistory;
     private String systemPrompt;
+    private SkillRegistry skillRegistry;
+    private SkillContextBuffer skillContextBuffer;
 
     public Agent(LlmClient llmClient, ToolRegistry toolRegistry) {
         this(llmClient, toolRegistry, null, PromptAssembler.createDefault(), new MemoryManager(llmClient));
@@ -58,11 +63,29 @@ public class Agent {
         this.conversationHistory.add(LlmClient.Message.system(systemPrompt));
     }
 
+    public void setSkillRegistry(SkillRegistry skillRegistry) {
+        this.skillRegistry = skillRegistry;
+        refreshSkillIndex("");
+    }
+
+    public void setSkillContextBuffer(SkillContextBuffer skillContextBuffer) {
+        this.skillContextBuffer = skillContextBuffer;
+    }
+
+    public SkillRegistry getSkillRegistry() {
+        return skillRegistry;
+    }
+
+    /** skill 列表变更后刷新 system prompt 中的索引段 */
+    public void refreshSkillIndex() {
+        refreshSkillIndex("");
+    }
+
     public String run(String userInput) {
         log.info("用户输入: {}", userInput);
         memoryManager.addUserMessage(userInput);
         updateSystemPromptWithMemory(userInput);
-        conversationHistory.add(LlmClient.Message.user(userInput));
+        conversationHistory.add(LlmClient.Message.user(prependSkillBodies(userInput)));
 
         AgentBudget budget = AgentBudget.fromLlmClient(llmClient);
 
@@ -123,6 +146,9 @@ public class Agent {
     public void reset() {
         conversationHistory.clear();
         memoryManager.clearShortTerm();
+        if (skillContextBuffer != null) {
+            skillContextBuffer.clear();
+        }
         this.systemPrompt = assembleSystemPrompt(toolRegistry.getProjectPath(), "");
         conversationHistory.add(LlmClient.Message.system(systemPrompt));
         log.info("对话历史已重置");
@@ -214,6 +240,10 @@ public class Agent {
                 userInput,
                 memoryManager.getContextProfile().memoryContextTokens()
         );
+        refreshSkillIndex(memoryContext);
+    }
+
+    private void refreshSkillIndex(String memoryContext) {
         this.systemPrompt = assembleSystemPrompt(toolRegistry.getProjectPath(), memoryContext);
         if (!conversationHistory.isEmpty() && "system".equals(conversationHistory.get(0).role())) {
             conversationHistory.set(0, LlmClient.Message.system(systemPrompt));
@@ -227,8 +257,32 @@ public class Agent {
                         .workspacePath(workspacePath)
                         .projectMemoryContext(AgentMdLoader.loadForPrompt(Path.of(workspacePath)))
                         .memoryContext(memoryContext)
+                        .skillIndex(buildSkillIndex())
                         .build()
         );
+    }
+
+    private String buildSkillIndex() {
+        if (skillRegistry == null) {
+            return "";
+        }
+        try {
+            return SkillIndexFormatter.format(skillRegistry.enabledSkills());
+        } catch (Exception e) {
+            log.warn("构建 skill 索引失败", e);
+            return "";
+        }
+    }
+
+    private String prependSkillBodies(String userInput) {
+        if (skillContextBuffer == null || skillContextBuffer.isEmpty()) {
+            return userInput;
+        }
+        String drained = skillContextBuffer.drain();
+        if (drained.isEmpty()) {
+            return userInput;
+        }
+        return drained + "\n用户输入：\n" + userInput;
     }
 
     private void maybeCompactHistory() {

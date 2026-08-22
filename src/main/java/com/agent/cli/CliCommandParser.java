@@ -29,7 +29,12 @@ public final class CliCommandParser {
         MEMORY_DELETE,
         MEMORY_CLEAR,
         MCP_LIST,
-        MCP_RESOURCES
+        MCP_RESOURCES,
+        SKILL_LIST,
+        SKILL_SHOW,
+        SKILL_ON,
+        SKILL_OFF,
+        SKILL_RELOAD
     }
 
     public record ParsedCommand(CommandType type, String payload) {
@@ -101,6 +106,21 @@ public final class CliCommandParser {
         }
         if (lower.startsWith("/mcp resources ")) {
             return new ParsedCommand(CommandType.MCP_RESOURCES, trimmed.substring(15).trim());
+        }
+        if (lower.equals("/skill") || lower.equals("/skill list")) {
+            return new ParsedCommand(CommandType.SKILL_LIST, null);
+        }
+        if (lower.equals("/skill reload")) {
+            return new ParsedCommand(CommandType.SKILL_RELOAD, null);
+        }
+        if (lower.startsWith("/skill show ")) {
+            return new ParsedCommand(CommandType.SKILL_SHOW, trimmed.substring(12).trim());
+        }
+        if (lower.startsWith("/skill on ")) {
+            return new ParsedCommand(CommandType.SKILL_ON, trimmed.substring(10).trim());
+        }
+        if (lower.startsWith("/skill off ")) {
+            return new ParsedCommand(CommandType.SKILL_OFF, trimmed.substring(11).trim());
         }
 
         String[] parts = trimmed.split("\\s+", 2);

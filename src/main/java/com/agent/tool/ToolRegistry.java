@@ -13,6 +13,9 @@ import com.agent.web.SearchProviderFactory;
 import com.agent.web.SearchResult;
 import com.agent.web.WebFetcher;
 import com.agent.mcp.protocol.McpToolDescriptor;
+import com.agent.skill.Skill;
+import com.agent.skill.SkillContextBuffer;
+import com.agent.skill.SkillRegistry;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
@@ -69,6 +72,8 @@ public class ToolRegistry {
     private WebFetcher webFetcher;
     private HtmlExtractor htmlExtractor;
     private NetworkPolicy networkPolicy;
+    private SkillRegistry skillRegistry;
+    private SkillContextBuffer skillContextBuffer;
 
     record Tool(String name, String description, JsonNode parameters, ToolExecutor executor) {}
 
@@ -127,6 +132,7 @@ public class ToolRegistry {
         registerExecuteCommand();
         registerCreateProject();
         registerSaveMemory();
+        registerSkillTools();
         registerWebTools();
     }
 
@@ -462,6 +468,67 @@ public class ToolRegistry {
 
     public void setMemorySaver(BiConsumer<String, String> memorySaver) {
         this.memorySaver = memorySaver;
+    }
+
+    public void setSkillRegistry(SkillRegistry skillRegistry) {
+        this.skillRegistry = skillRegistry;
+    }
+
+    public SkillRegistry getSkillRegistry() {
+        return skillRegistry;
+    }
+
+    public void setSkillContextBuffer(SkillContextBuffer skillContextBuffer) {
+        this.skillContextBuffer = skillContextBuffer;
+    }
+
+    public SkillContextBuffer getSkillContextBuffer() {
+        return skillContextBuffer;
+    }
+
+    private void registerSkillTools() {
+        registerTool(new Tool(
+                "load_skill",
+                "Load full SKILL.md instructions when a skill's description matches the current task. "
+                        + "Pass the exact skill name from the \"可用 Skills\" section in system prompt. "
+                        + "The body appears at the start of your next user message. Don't reload the same skill twice.",
+                createParameters(new Param("name", "string", "skill name, e.g. web-access", true)),
+                args -> {
+                    String name = args.get("name");
+                    if (name == null || name.isBlank()) {
+                        return "load_skill 失败: name 不能为空";
+                    }
+                    if (skillRegistry == null) {
+                        return "load_skill 失败: Skill 系统未初始化";
+                    }
+                    Skill skill = skillRegistry.findSkill(name);
+                    if (skill == null) {
+                        Skill any = skillRegistry.findAnySkill(name);
+                        if (any == null) {
+                            return "Skill '" + name + "' 未找到，可用 /skill list 查看";
+                        }
+                        return "Skill '" + name + "' 已被禁用，可用 /skill on " + name + " 启用";
+                    }
+                    String body = skill.body();
+                    int originalLen = body == null ? 0 : body.length();
+                    int max = 5 * 1024;
+                    String injected = body == null ? "" : body;
+                    if (injected.length() > max) {
+                        injected = injected.substring(0, max)
+                                + "\n\n...(skill body truncated, full content via /skill show " + name + ")";
+                    }
+                    if (skillContextBuffer != null) {
+                        skillContextBuffer.push(name, injected);
+                    }
+                    return "已加载 skill '" + name + "' 的完整指引（" + originalLen
+                            + " bytes），将在下一轮上下文中以 \"## 已加载 Skill：" + name + "\" 段出现。";
+                }
+        ));
+    }
+
+    public String executeTool(String name, String argumentsJson) {
+        ToolExecutionResult result = doExecuteTool(new ToolInvocation("test_call", name, argumentsJson));
+        return result.result();
     }
 
     public void registerTool(Tool tool) {

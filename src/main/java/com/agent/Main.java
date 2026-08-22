@@ -1,6 +1,12 @@
 package com.agent;
 
 import com.agent.cli.CliCommandParser;
+import com.agent.cli.SkillCommandHandler;
+import com.agent.skill.SkillBuiltinExtractor;
+import com.agent.skill.SkillContextBuffer;
+import com.agent.skill.SkillPaths;
+import com.agent.skill.SkillRegistry;
+import com.agent.skill.SkillStateStore;
 import com.agent.cli.CliCommandParser.CommandType;
 import com.agent.cli.CliCommandParser.ParsedCommand;
 import com.agent.cli.PlanReviewInputParser;
@@ -35,6 +41,9 @@ public class Main {
     private static McpServerManager mcpServerManager;
     private static TerminalHitlHandler hitlHandler;
     private static LlmClient llmClient;
+    private static SkillRegistry skillRegistry;
+    private static SkillStateStore skillStateStore;
+    private static SkillContextBuffer skillContextBuffer;
     private static BufferedReader inputReader;
     private static boolean running = true;
 
@@ -85,6 +94,7 @@ public class Main {
             toolRegistry = new HitlToolRegistry(hitlHandler, workspace);
             mcpServerManager = new McpServerManager(toolRegistry, workspace);
             startMcpServers();
+            startSkillSystem(workspace);
             Runtime.getRuntime().addShutdownHook(new Thread(() -> {
                 if (mcpServerManager != null) {
                     mcpServerManager.close();
@@ -92,12 +102,15 @@ public class Main {
             }, "agent-mcp-shutdown"));
 
             agent = new Agent(llmClient, toolRegistry);
+            agent.setSkillRegistry(skillRegistry);
+            agent.setSkillContextBuffer(skillContextBuffer);
             planAgent = new PlanExecuteAgent(llmClient, toolRegistry, Main::reviewPlan);
             teamAgent = new AgentOrchestrator(llmClient, toolRegistry, agent.getMemoryManager());
 
             System.out.println("✓ Agent 初始化完成");
             System.out.println("✓ 可用工具: " + agent.getAvailableTools());
             System.out.println("✓ 工作目录: " + toolRegistry.getProjectPath());
+            System.out.println(SkillCommandHandler.startupSummary(skillRegistry));
             printWebSearchHint();
             System.out.println();
             printHelp();
@@ -264,6 +277,17 @@ public class Main {
             }
             case MCP_LIST -> System.out.println(mcpServerManager.formatStatus());
             case MCP_RESOURCES -> handleMcpResources(command.payload());
+            case SKILL_LIST -> System.out.println(SkillCommandHandler.list(skillRegistry));
+            case SKILL_SHOW -> System.out.println(SkillCommandHandler.show(skillRegistry, command.payload()));
+            case SKILL_ON -> {
+                System.out.println(SkillCommandHandler.enable(skillRegistry, skillStateStore, command.payload()));
+                agent.refreshSkillIndex();
+            }
+            case SKILL_OFF -> {
+                System.out.println(SkillCommandHandler.disable(skillRegistry, skillStateStore, command.payload()));
+                agent.refreshSkillIndex();
+            }
+            case SKILL_RELOAD -> handleSkillReload();
             case UNKNOWN -> System.out.println("未知命令: " + command.payload() + "，输入 /help 查看所有命令");
             default -> {
             }
@@ -330,6 +354,36 @@ public class Main {
         System.out.println("HITL 状态: " + (hitlHandler.isEnabled() ? "开启" : "关闭"));
         System.out.println("危险工具: write_file / execute_command / create_project / mcp__*");
         System.out.println("用法: /hitl on | /hitl off");
+    }
+
+    private static void startSkillSystem(Path workspace) {
+        Path cacheDir = SkillPaths.skillsCacheDir();
+        try {
+            new SkillBuiltinExtractor(cacheDir).extractAll();
+        } catch (Exception e) {
+            System.out.println("⚠️  内置 skill 解压失败: " + e.getMessage());
+        }
+        skillStateStore = new SkillStateStore(SkillPaths.skillsStateFile());
+        skillRegistry = new SkillRegistry(
+                cacheDir,
+                SkillPaths.userSkillsDir(),
+                SkillPaths.projectSkillsDir(workspace),
+                skillStateStore
+        );
+        skillRegistry.reload();
+        skillContextBuffer = new SkillContextBuffer();
+        toolRegistry.setSkillRegistry(skillRegistry);
+        toolRegistry.setSkillContextBuffer(skillContextBuffer);
+        for (String warning : skillRegistry.warnings()) {
+            System.out.println("⚠️  Skill: " + warning);
+        }
+    }
+
+    private static void handleSkillReload() {
+        skillRegistry.reload();
+        agent.refreshSkillIndex();
+        System.out.println("✓ Skill 列表已重新扫描");
+        System.out.println(SkillCommandHandler.list(skillRegistry));
     }
 
     private static void startMcpServers() {
@@ -509,6 +563,8 @@ public class Main {
         System.out.println("  /memory list/search/delete/clear  管理长期记忆");
         System.out.println("  /mcp          查看 MCP server 状态");
         System.out.println("  /mcp resources <server>  查看 MCP server 的 resources");
+        System.out.println("  /skill        查看可用 skill 列表");
+        System.out.println("  /skill show/on/off/reload  管理 skill");
         System.out.println("  /exit         退出程序");
         System.out.println();
         System.out.println("项目根在启动时确定（对齐 PaiCLI，运行中不可通过 Agent 切换）:");

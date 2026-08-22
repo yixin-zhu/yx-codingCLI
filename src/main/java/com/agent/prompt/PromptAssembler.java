@@ -32,6 +32,7 @@ public class PromptAssembler {
         append(prompt, applyVariables(repository.loadRequired(mode.resourcePath()), ctx));
         append(prompt, dynamicSection("Project Context", ctx.projectMemoryContext()));
         append(prompt, ctx.memoryContext());
+        append(prompt, dynamicSection("Skills", ctx.skillIndex()));
         append(prompt, runtimeContext(ctx));
 
         String assembled = prompt.toString().trim();

@@ -47,8 +47,9 @@ class AgentTest {
         assertTrue(tools.contains("save_memory"), "save_memory 工具应已注册");
         assertTrue(tools.contains("web_search"), "web_search 工具应已注册");
         assertTrue(tools.contains("web_fetch"), "web_fetch 工具应已注册");
+        assertTrue(tools.contains("load_skill"), "load_skill 工具应已注册");
 
-        assertEquals(10, tools.size());
+        assertEquals(11, tools.size());
         
         System.out.println("✓ 已注册工具: " + tools);
     }
