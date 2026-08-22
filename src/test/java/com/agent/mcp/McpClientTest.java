@@ -181,6 +181,81 @@ class McpClientTest {
                 "close 不再发 shutdown 通知，sent 列表不应增长");
     }
 
+    @Test
+    void listResourcesConvertsServerResources() throws Exception {
+        InMemoryTransport transport = new InMemoryTransport()
+                .handle("initialize", p -> readJson("""
+                        {"capabilities":{"resources":{"listChanged":true}}}
+                        """))
+                .handle("resources/list", p -> readJson("""
+                        {"resources":[
+                          {"uri":"file://README.md","name":"README.md","description":"docs","mimeType":"text/markdown","size":42}
+                        ]}
+                        """));
+        McpClient client = new McpClient("fs", transport);
+        client.initialize();
+
+        var resources = client.listResources();
+
+        assertTrue(client.supportsResources());
+        assertEquals(1, resources.size());
+        assertEquals("fs", resources.get(0).serverName());
+        assertEquals("file://README.md", resources.get(0).uri());
+        assertEquals("text/markdown", resources.get(0).mimeType());
+        client.close();
+    }
+
+    @Test
+    void listResourcesTreatsMethodNotFoundAsEmptyList() throws Exception {
+        InMemoryTransport transport = new InMemoryTransport()
+                .handle("initialize", p -> MAPPER.createObjectNode());
+        McpClient client = new McpClient("fs", transport);
+        client.initialize();
+
+        assertTrue(client.listResources().isEmpty());
+        client.close();
+    }
+
+    @Test
+    void readResourceReturnsTextContents() throws Exception {
+        InMemoryTransport transport = new InMemoryTransport()
+                .handle("initialize", p -> MAPPER.createObjectNode())
+                .handle("resources/read", p -> readJson("""
+                        {"contents":[{"uri":"file://README.md","mimeType":"text/markdown","text":"hello"}]}
+                        """));
+        McpClient client = new McpClient("fs", transport);
+        client.initialize();
+
+        var contents = client.readResource("file://README.md");
+
+        assertEquals(1, contents.size());
+        assertEquals("hello", contents.get(0).text());
+        assertTrue(McpClient.formatResourceContents(contents).contains("<resource uri=\"file://README.md\""));
+        client.close();
+    }
+
+    @Test
+    void onNotificationReceivesServerPush() throws Exception {
+        InMemoryTransport transport = new InMemoryTransport()
+                .handle("initialize", p -> MAPPER.createObjectNode());
+        McpClient client = new McpClient("demo", transport);
+        java.util.concurrent.CountDownLatch latch = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.atomic.AtomicReference<String> methodHolder = new java.util.concurrent.atomic.AtomicReference<>();
+        client.onNotification(message -> {
+            methodHolder.set(message.path("method").asText());
+            latch.countDown();
+        });
+        client.initialize();
+
+        transport.pushNotification(readJson("""
+                {"jsonrpc":"2.0","method":"notifications/tools/list_changed","params":{}}
+                """));
+
+        assertTrue(latch.await(2, java.util.concurrent.TimeUnit.SECONDS));
+        assertEquals("notifications/tools/list_changed", methodHolder.get());
+        client.close();
+    }
+
     private static JsonNode readJson(String json) {
         try {
             return MAPPER.readTree(json);

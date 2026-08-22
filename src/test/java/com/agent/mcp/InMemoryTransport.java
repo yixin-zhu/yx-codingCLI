@@ -76,4 +76,11 @@ public class InMemoryTransport implements McpTransport {
     public void close() {
         closed = true;
     }
+
+    /** 模拟 server 主动推送 notification（无 id）。 */
+    public void pushNotification(JsonNode notification) {
+        for (Consumer<JsonNode> listener : listeners) {
+            listener.accept(notification);
+        }
+    }
 }

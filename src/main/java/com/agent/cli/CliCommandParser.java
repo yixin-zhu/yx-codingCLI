@@ -27,7 +27,8 @@ public final class CliCommandParser {
         MEMORY_SEARCH,
         MEMORY_DELETE,
         MEMORY_CLEAR,
-        MCP_LIST
+        MCP_LIST,
+        MCP_RESOURCES
     }
 
     public record ParsedCommand(CommandType type, String payload) {
@@ -91,6 +92,12 @@ public final class CliCommandParser {
         if (lower.startsWith("/audit ")) {
             return new ParsedCommand(CommandType.AUDIT, trimmed.substring(7).trim());
         }
+        if (lower.equals("/mcp")) {
+            return new ParsedCommand(CommandType.MCP_LIST, null);
+        }
+        if (lower.startsWith("/mcp resources ")) {
+            return new ParsedCommand(CommandType.MCP_RESOURCES, trimmed.substring(15).trim());
+        }
 
         String[] parts = trimmed.split("\\s+", 2);
         String command = parts[0].toLowerCase();
@@ -106,7 +113,6 @@ public final class CliCommandParser {
             case "/pwd" -> new ParsedCommand(CommandType.PWD, payload);
             case "/plan" -> new ParsedCommand(CommandType.PLAN, payload);
             case "/team" -> new ParsedCommand(CommandType.TEAM, payload);
-            case "/mcp" -> new ParsedCommand(CommandType.MCP_LIST, payload);
             default -> trimmed.startsWith("/")
                     ? new ParsedCommand(CommandType.UNKNOWN, trimmed)
                     : ParsedCommand.none();

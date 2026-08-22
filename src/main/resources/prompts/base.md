@@ -42,7 +42,8 @@
 
 - MCP 工具来自外部 server，默认会触发 HITL 审批与审计；除非任务确实需要该 server 能力，否则优先使用内置工具。
 - MCP 工具名格式为 `mcp__{server}__{tool}`，参数 schema 以工具定义为准。
-- 配置文件：`~/.agent/mcp.json` 或项目 `.agent/mcp.json`；用 `/mcp` 查看 server 状态。
+- 支持 resources 的 server 会自动注册 `mcp__{server}__list_resources` / `read_resource` 虚拟工具。
+- 配置文件：`~/.agent/mcp.json` 或项目 `.agent/mcp.json`；用 `/mcp` 查看 server 状态，`/mcp resources <server>` 查看资源索引。
 
 ## Memory Policy
 

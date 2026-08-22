@@ -259,6 +259,7 @@ public class Main {
                 System.out.println("✓ 长期记忆已清空");
             }
             case MCP_LIST -> System.out.println(mcpServerManager.formatStatus());
+            case MCP_RESOURCES -> handleMcpResources(command.payload());
             case UNKNOWN -> System.out.println("未知命令: " + command.payload() + "，输入 /help 查看所有命令");
             default -> {
             }
@@ -339,6 +340,14 @@ public class Main {
         } catch (Exception e) {
             System.out.println("⚠️  MCP 启动失败: " + e.getMessage());
         }
+    }
+
+    private static void handleMcpResources(String serverName) {
+        if (serverName == null || serverName.isBlank()) {
+            System.out.println("用法: /mcp resources <server>");
+            return;
+        }
+        System.out.println(mcpServerManager.resources(serverName.trim()));
     }
 
     private static void printAudit(String payload) {
@@ -494,6 +503,7 @@ public class Main {
         System.out.println("  /memory       查看记忆系统状态");
         System.out.println("  /memory list/search/delete/clear  管理长期记忆");
         System.out.println("  /mcp          查看 MCP server 状态");
+        System.out.println("  /mcp resources <server>  查看 MCP server 的 resources");
         System.out.println("  /exit         退出程序");
         System.out.println();
         System.out.println("项目根在启动时确定（对齐 PaiCLI，运行中不可通过 Agent 切换）:");

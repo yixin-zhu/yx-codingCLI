@@ -1,6 +1,7 @@
 package com.agent.mcp;
 
 import com.agent.mcp.config.McpServerConfig;
+import com.agent.mcp.notifications.NotificationRouter;
 import com.agent.mcp.protocol.McpToolDescriptor;
 
 import java.time.Duration;
@@ -12,6 +13,7 @@ public class McpServer {
     private final McpServerConfig config;
     private volatile McpServerStatus status = McpServerStatus.DISABLED;
     private volatile McpClient client;
+    private volatile NotificationRouter notificationRouter;
     private volatile List<McpToolDescriptor> tools = List.of();
     private volatile String errorMessage;
     private volatile Instant startedAt;
@@ -46,6 +48,14 @@ public class McpServer {
 
     public void client(McpClient client) {
         this.client = client;
+    }
+
+    public NotificationRouter notificationRouter() {
+        return notificationRouter;
+    }
+
+    public void notificationRouter(NotificationRouter notificationRouter) {
+        this.notificationRouter = notificationRouter;
     }
 
     public List<McpToolDescriptor> tools() {
@@ -95,6 +105,10 @@ public class McpServer {
     }
 
     public void close() {
+        if (notificationRouter != null) {
+            notificationRouter.close();
+            notificationRouter = null;
+        }
         if (client != null) {
             client.close();
             client = null;
