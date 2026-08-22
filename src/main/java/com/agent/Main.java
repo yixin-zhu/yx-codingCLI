@@ -13,6 +13,8 @@ import com.agent.memory.MemoryManager;
 import com.agent.plan.ExecutionPlan;
 import com.agent.policy.AuditLog;
 import com.agent.tool.ToolRegistry;
+import com.agent.web.SearchProvider;
+import com.agent.web.SearchProviderFactory;
 
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
@@ -86,6 +88,7 @@ public class Main {
             System.out.println("✓ Agent 初始化完成");
             System.out.println("✓ 可用工具: " + agent.getAvailableTools());
             System.out.println("✓ 工作目录: " + toolRegistry.getProjectPath());
+            printWebSearchHint();
             System.out.println();
             printHelp();
             printSeparator();
@@ -429,6 +432,16 @@ public class Main {
 
         } catch (Exception e) {
             System.err.println("\n❌ 执行失败: " + e.getMessage());
+        }
+    }
+
+    private static void printWebSearchHint() {
+        SearchProvider provider = SearchProviderFactory.create();
+        if (provider.isReady()) {
+            System.out.println("✓ 联网搜索: " + provider.name() + " 已就绪");
+        } else {
+            System.out.println("⚠️  联网搜索未配置（web_search 不可用，web_fetch 仍可用）");
+            System.out.println("   设置 SERPAPI_KEY 或 SEARXNG_URL 后重启");
         }
     }
 

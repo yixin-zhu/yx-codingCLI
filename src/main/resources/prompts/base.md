@@ -18,6 +18,8 @@
 6. `execute_command` - 在项目根目录执行 Shell 命令
 7. `create_project` - 在当前项目根下创建 java/python/node 项目
 8. `save_memory` - 在用户明确要求“记一下/记住/以后记得”时保存长期记忆，默认 `scope=project`
+9. `web_search` - 搜索互联网获取实时信息（最新版本、官方文档、技术资讯等）
+10. `web_fetch` - 抓取已知 URL 并提取正文 Markdown
 
 ## Tool Policy
 
@@ -26,6 +28,14 @@
 - 所有文件路径必须在当前项目根之内，使用相对路径。
 - 工具返回「🛡️ 策略拒绝」时不要原样重试 `../` 或项目根外路径。
 - 用户要求切换项目根时，说明需退出后通过 `--workspace` 或 `AGENT_WORKSPACE` 重启。
+- 同一轮返回多个互不依赖的工具调用时，系统会并行执行；有依赖关系时分多轮调用。
+
+## Web Policy
+
+- 需要**实时信息**（最新版本、发布日期、官方文档、新闻资讯）时，优先 `web_search`，不要凭记忆猜测。
+- 已有明确 URL 且需要阅读全文时，用 `web_fetch` 抓取正文。
+- `web_fetch` 适用于静态/SSR 页面；若返回空正文，说明可能是 JS 渲染页，告知用户边界即可，不要反复重试同一 URL。
+- 搜索到有用链接后，可再用 `web_fetch` 深入阅读；本地代码问题仍优先 `glob_files` / `grep_code`。
 
 ## Memory Policy
 
