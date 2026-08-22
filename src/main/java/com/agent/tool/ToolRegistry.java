@@ -25,6 +25,11 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.function.BiConsumer;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
@@ -37,8 +42,11 @@ import org.slf4j.LoggerFactory;
 public class ToolRegistry {
 
     private static final Logger log = LoggerFactory.getLogger(ToolRegistry.class);
+    private static final int MAX_PARALLEL_TOOLS = 4;
+    static final long DEFAULT_TOOL_BATCH_TIMEOUT_SECONDS = 90;
 
     private final Map<String, Tool> tools = new LinkedHashMap<>();
+    private final long toolBatchTimeoutSeconds;
     private final AuditLog auditLog = new AuditLog();
     private Path workingDirectory;
     private PathGuard pathGuard;
@@ -54,7 +62,26 @@ public class ToolRegistry {
 
     public record ToolInvocation(String id, String name, String argumentsJson) {}
 
-    public record ToolExecutionResult(String id, String name, String result, long elapsedMillis) {}
+    public record ToolExecutionResult(String id, String name, String result, long elapsedMillis, boolean timedOut) {
+        public ToolExecutionResult(String id, String name, String result, long elapsedMillis) {
+            this(id, name, result, elapsedMillis, false);
+        }
+
+        static ToolExecutionResult failed(ToolInvocation invocation, String message) {
+            return new ToolExecutionResult(
+                    invocation.id(), invocation.name(), "工具执行失败: " + message, 0, false);
+        }
+
+        static ToolExecutionResult timedOut(ToolInvocation invocation, long timeoutSeconds) {
+            return new ToolExecutionResult(
+                    invocation.id(),
+                    invocation.name(),
+                    "工具执行超时（" + timeoutSeconds + "秒），已取消",
+                    timeoutSeconds * 1000,
+                    true
+            );
+        }
+    }
 
     private record Param(String name, String type, String description, boolean required) {}
 
@@ -63,6 +90,11 @@ public class ToolRegistry {
     }
 
     public ToolRegistry(Path workingDirectory) {
+        this(workingDirectory, DEFAULT_TOOL_BATCH_TIMEOUT_SECONDS);
+    }
+
+    ToolRegistry(Path workingDirectory, long toolBatchTimeoutSeconds) {
+        this.toolBatchTimeoutSeconds = toolBatchTimeoutSeconds;
         setProjectPath(workingDirectory);
         registerDefaultTools();
     }
@@ -284,12 +316,63 @@ public class ToolRegistry {
         return tools.keySet();
     }
 
+    /**
+     * 并行执行同一轮 LLM 返回的多个工具调用。
+     * 结果按传入顺序返回，便于按原 tool_call 顺序回灌消息历史。
+     */
     public List<ToolExecutionResult> executeTools(List<ToolInvocation> invocations) {
-        List<ToolExecutionResult> results = new ArrayList<>();
-        for (ToolInvocation invocation : invocations) {
-            results.add(executeTool(invocation));
+        if (invocations == null || invocations.isEmpty()) {
+            return List.of();
         }
-        return results;
+        if (invocations.size() == 1) {
+            return List.of(executeTool(invocations.get(0)));
+        }
+
+        int parallelism = Math.min(invocations.size(), MAX_PARALLEL_TOOLS);
+        ExecutorService executor = Executors.newFixedThreadPool(parallelism, r -> {
+            Thread thread = new Thread(r, "agent-tool-executor");
+            thread.setDaemon(true);
+            return thread;
+        });
+
+        try {
+            List<Callable<ToolExecutionResult>> tasks = invocations.stream()
+                    .<Callable<ToolExecutionResult>>map(invocation -> () -> executeTool(invocation))
+                    .toList();
+
+            List<Future<ToolExecutionResult>> futures =
+                    executor.invokeAll(tasks, toolBatchTimeoutSeconds, TimeUnit.SECONDS);
+
+            List<ToolExecutionResult> results = new ArrayList<>(invocations.size());
+            for (int i = 0; i < futures.size(); i++) {
+                ToolInvocation invocation = invocations.get(i);
+                Future<ToolExecutionResult> future = futures.get(i);
+                if (future.isCancelled()) {
+                    results.add(ToolExecutionResult.timedOut(invocation, toolBatchTimeoutSeconds));
+                    continue;
+                }
+                try {
+                    results.add(future.get());
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    results.add(ToolExecutionResult.failed(invocation, "工具执行被中断"));
+                } catch (ExecutionException e) {
+                    Throwable cause = e.getCause();
+                    String message = cause == null || cause.getMessage() == null
+                            ? "未知错误"
+                            : cause.getMessage();
+                    results.add(ToolExecutionResult.failed(invocation, message));
+                }
+            }
+            return results;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return invocations.stream()
+                    .map(inv -> ToolExecutionResult.failed(inv, "工具批次执行被中断"))
+                    .toList();
+        } finally {
+            executor.shutdownNow();
+        }
     }
 
     protected ToolExecutionResult executeTool(ToolInvocation invocation) {

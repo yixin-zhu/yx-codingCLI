@@ -11,11 +11,18 @@ import com.agent.tool.ToolRegistry;
 
 import java.io.IOException;
 import java.io.PrintStream;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.stream.Collectors;
 
 import org.slf4j.Logger;
@@ -27,6 +34,7 @@ import org.slf4j.LoggerFactory;
 public class PlanExecuteAgent {
 
     private static final Logger log = LoggerFactory.getLogger(PlanExecuteAgent.class);
+    private static final int MAX_PARALLEL_TASKS = 4;
 
     public interface PlanReviewHandler {
         PlanReviewDecision review(String goal, ExecutionPlan plan);
@@ -117,28 +125,32 @@ public class PlanExecuteAgent {
                 break;
             }
 
-            for (Task task : executableTasks) {
-                out.println("▶️ 执行任务 [" + task.getId() + "]: " + task.getDescription());
-                task.markStarted();
-                try {
-                    String result = executeTask(plan.getGoal(), plan, task);
-                    task.markCompleted(result);
+            List<TaskExecutionResult> batchResults = executeTaskBatch(plan, executableTasks);
+            for (TaskExecutionResult batchResult : batchResults) {
+                Task task = batchResult.task();
+
+                if (!batchResult.failed()) {
+                    task.markCompleted(batchResult.result());
                     log.info("Task completed: {}", task.getId());
-                    if (result == null || result.isBlank()) {
+                    if (batchResult.result() == null || batchResult.result().isBlank()) {
                         out.println("✅ 完成 [" + task.getId() + "]\n");
                     } else {
-                        String preview = result.length() > 100 ? result.substring(0, 100) + "..." : result;
+                        String preview = batchResult.result().length() > 100
+                                ? batchResult.result().substring(0, 100) + "..."
+                                : batchResult.result();
                         out.println("✅ 完成 [" + task.getId() + "]: " + preview + "\n");
                     }
-                } catch (Exception e) {
-                    task.markFailed(e.getMessage());
-                    log.warn("Task failed: {} error={}", task.getId(), e.getMessage());
-                    out.println("❌ 失败 [" + task.getId() + "]: " + e.getMessage() + "\n");
-                    if (!finalResult.isEmpty()) {
-                        finalResult.append("\n");
-                    }
-                    finalResult.append("任务 ").append(task.getId()).append(" 失败: ").append(e.getMessage());
+                    continue;
                 }
+
+                Exception error = batchResult.error();
+                task.markFailed(error.getMessage());
+                log.warn("Task failed: {} error={}", task.getId(), error.getMessage());
+                out.println("❌ 失败 [" + task.getId() + "]: " + error.getMessage() + "\n");
+                if (!finalResult.isEmpty()) {
+                    finalResult.append("\n");
+                }
+                finalResult.append("任务 ").append(task.getId()).append(" 失败: ").append(error.getMessage());
             }
         }
 
@@ -175,7 +187,99 @@ public class PlanExecuteAgent {
                 .toList();
     }
 
+    private record TaskExecutionResult(Task task, String result, Exception error) {
+        static TaskExecutionResult success(Task task, String result) {
+            return new TaskExecutionResult(task, result, null);
+        }
+
+        static TaskExecutionResult failure(Task task, Exception error) {
+            return new TaskExecutionResult(task, null, error);
+        }
+
+        boolean failed() {
+            return error != null;
+        }
+    }
+
+    private List<TaskExecutionResult> executeTaskBatch(ExecutionPlan plan, List<Task> executableTasks) {
+        if (executableTasks.size() == 1) {
+            Task task = executableTasks.get(0);
+            log.info("Executing single task: {} type={}", task.getId(), task.getType());
+            out.println("▶️ 执行任务 [" + task.getId() + "]: " + task.getDescription());
+            task.markStarted();
+            try {
+                return List.of(TaskExecutionResult.success(task, executeTask(plan.getGoal(), plan, task)));
+            } catch (Exception e) {
+                return List.of(TaskExecutionResult.failure(task, e));
+            }
+        }
+
+        String parallelTaskIds = executableTasks.stream()
+                .map(Task::getId)
+                .collect(Collectors.joining(", "));
+        log.info("Executing parallel batch: {}", parallelTaskIds);
+        out.println("⚡ 本轮并行执行 " + executableTasks.size() + " 个任务: " + parallelTaskIds);
+
+        ExecutorService executor = Executors.newFixedThreadPool(
+                Math.min(executableTasks.size(), MAX_PARALLEL_TASKS),
+                r -> {
+                    Thread t = new Thread(r, "agent-plan-executor");
+                    t.setDaemon(true);
+                    return t;
+                });
+        try {
+            Map<String, java.io.ByteArrayOutputStream> buffers = new LinkedHashMap<>();
+            List<Future<TaskExecutionResult>> futures = new ArrayList<>();
+            for (Task task : executableTasks) {
+                out.println("▶️ 并行任务 [" + task.getId() + "]: " + task.getDescription());
+                task.markStarted();
+                java.io.ByteArrayOutputStream baos = new java.io.ByteArrayOutputStream();
+                buffers.put(task.getId(), baos);
+                PrintStream taskOut = new PrintStream(baos, true, StandardCharsets.UTF_8);
+                futures.add(executor.submit(() -> {
+                    try {
+                        return TaskExecutionResult.success(
+                                task, executeTask(plan.getGoal(), plan, task, taskOut));
+                    } catch (Exception e) {
+                        return TaskExecutionResult.failure(task, e);
+                    }
+                }));
+            }
+
+            List<TaskExecutionResult> results = new ArrayList<>();
+            for (Future<TaskExecutionResult> future : futures) {
+                try {
+                    results.add(future.get());
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    results.add(TaskExecutionResult.failure(executableTasks.get(results.size()), e));
+                } catch (ExecutionException e) {
+                    Throwable cause = e.getCause();
+                    Exception error = cause instanceof Exception exception
+                            ? exception
+                            : new RuntimeException(cause);
+                    results.add(TaskExecutionResult.failure(executableTasks.get(results.size()), error));
+                }
+            }
+
+            for (Task task : executableTasks) {
+                java.io.ByteArrayOutputStream buf = buffers.get(task.getId());
+                if (buf != null && buf.size() > 0) {
+                    out.print(buf.toString(StandardCharsets.UTF_8));
+                    out.flush();
+                }
+            }
+            return results;
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
     private String executeTask(String goal, ExecutionPlan plan, Task task) throws IOException {
+        return executeTask(goal, plan, task, out);
+    }
+
+    private String executeTask(String goal, ExecutionPlan plan, Task task, PrintStream taskOut) throws IOException {
         String prompt = promptAssembler.assemble(
                 PromptMode.PLAN,
                 PromptContext.builder()

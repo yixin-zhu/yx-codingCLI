@@ -6,18 +6,27 @@ import com.agent.tool.ToolRegistry;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
+import java.io.ByteArrayOutputStream;
 import java.io.PrintStream;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.LinkedBlockingQueue;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Multi-Agent 编排器：规划 → 执行 → 审查 → 重试（Phase 5 MVP，串行单 Worker）。
+ * Multi-Agent 编排器：规划 → 执行 → 审查 → 重试；无依赖步骤按 DAG 批次并行。
  */
 public class AgentOrchestrator {
 
@@ -27,7 +36,7 @@ public class AgentOrchestrator {
 
     private final LlmClient llmClient;
     private final SubAgent planner;
-    private final SubAgent worker;
+    private final List<SubAgent> workers;
     private final SubAgent reviewer;
     private final MemoryManager memoryManager;
     private final ToolRegistry toolRegistry;
@@ -75,7 +84,10 @@ public class AgentOrchestrator {
 
         this.memoryManager.setProjectPath(toolRegistry.getProjectPath());
         this.planner = new SubAgent("planner", AgentRole.PLANNER, llmClient, toolRegistry);
-        this.worker = new SubAgent("worker", AgentRole.WORKER, llmClient, toolRegistry);
+        this.workers = List.of(
+                new SubAgent("worker-1", AgentRole.WORKER, llmClient, toolRegistry),
+                new SubAgent("worker-2", AgentRole.WORKER, llmClient, toolRegistry)
+        );
         this.reviewer = new SubAgent("reviewer", AgentRole.REVIEWER, llmClient, toolRegistry);
     }
 
@@ -108,17 +120,28 @@ public class AgentOrchestrator {
         out.println(summarizeSteps(steps) + "\n");
 
         out.println("⚡ 第二阶段：执行");
-        Map<String, Integer> retryCount = new HashMap<>();
+        Map<String, Integer> retryCount = new ConcurrentHashMap<>();
+        int singleStepCursor = 0;
+        int batchIndex = 0;
 
         while (true) {
             List<ExecutionStep> executable = getExecutableSteps(steps);
             if (executable.isEmpty()) {
                 break;
             }
-            for (ExecutionStep step : executable) {
+            batchIndex++;
+
+            if (executable.size() == 1) {
+                ExecutionStep step = executable.get(0);
+                SubAgent worker = workers.get(singleStepCursor % workers.size());
+                singleStepCursor++;
                 String context = buildStepContext(steps, step);
-                runStep(step, steps, retryCount, context);
+                runStep(step, steps, retryCount, worker, reviewer, context, out);
                 worker.clearHistory();
+            } else {
+                out.println("⚡ 批次 #" + batchIndex + "：" + executable.size()
+                        + " 个独立步骤并行执行（最多 " + workers.size() + " 个并发 Worker）\n");
+                runBatchParallel(executable, steps, retryCount);
             }
         }
 
@@ -272,31 +295,97 @@ public class AgentOrchestrator {
         return "审查未通过，请改进执行结果";
     }
 
+    private void runBatchParallel(List<ExecutionStep> batch, List<ExecutionStep> steps,
+                                  Map<String, Integer> retryCount) {
+        int parallelism = Math.min(batch.size(), workers.size());
+        ExecutorService executor = Executors.newFixedThreadPool(parallelism, r -> {
+            Thread t = new Thread(r, "agent-multi-agent");
+            t.setDaemon(true);
+            return t;
+        });
+        BlockingQueue<SubAgent> workerPool = new LinkedBlockingQueue<>(workers);
+        Map<String, ByteArrayOutputStream> buffers = new ConcurrentHashMap<>();
+        List<Future<?>> futures = new ArrayList<>();
+
+        for (ExecutionStep step : batch) {
+            ByteArrayOutputStream baos = new ByteArrayOutputStream();
+            buffers.put(step.id(), baos);
+            PrintStream stepOut = new PrintStream(baos, true, StandardCharsets.UTF_8);
+            String context = buildStepContext(steps, step);
+
+            futures.add(executor.submit(() -> {
+                SubAgent worker = null;
+                SubAgent localReviewer = new SubAgent(
+                        "reviewer-" + step.id(), AgentRole.REVIEWER, llmClient, toolRegistry);
+                try {
+                    worker = workerPool.take();
+                    runStep(step, steps, retryCount, worker, localReviewer, context, stepOut);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    updateStep(steps, step.id(), step.withFailed("并行执行被中断"));
+                    stepOut.println("❌ 步骤 [" + step.id() + "] 被中断\n");
+                } catch (RuntimeException e) {
+                    log.error("Parallel step {} failed unexpectedly", step.id(), e);
+                    updateStep(steps, step.id(), step.withFailed("并行执行异常: " + e.getMessage()));
+                    stepOut.println("❌ 步骤 [" + step.id() + "] 并行执行异常：" + e.getMessage() + "\n");
+                } finally {
+                    if (worker != null) {
+                        worker.clearHistory();
+                        workerPool.offer(worker);
+                    }
+                    stepOut.flush();
+                }
+                return null;
+            }));
+        }
+
+        for (Future<?> future : futures) {
+            try {
+                future.get();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                log.warn("Batch wait interrupted");
+            } catch (ExecutionException e) {
+                log.error("Parallel step task failed", e.getCause());
+            }
+        }
+        executor.shutdownNow();
+
+        for (ExecutionStep step : batch) {
+            ByteArrayOutputStream buf = buffers.get(step.id());
+            if (buf != null && buf.size() > 0) {
+                out.print(buf.toString(StandardCharsets.UTF_8));
+                out.flush();
+            }
+        }
+    }
+
     private void runStep(ExecutionStep step, List<ExecutionStep> steps,
-                         Map<String, Integer> retryCount, String context) {
-        out.println("🛠️ " + worker.getName() + " 执行步骤 [" + step.id() + "]: " + step.description());
+                         Map<String, Integer> retryCount,
+                         SubAgent worker, SubAgent reviewer, String context, PrintStream stepOut) {
+        stepOut.println("🛠️ " + worker.getName() + " 执行步骤 [" + step.id() + "]: " + step.description());
 
         AgentMessage taskMsg = AgentMessage.task("orchestrator", step.description());
-        AgentMessage result = worker.executeWithContext(taskMsg, context, out);
+        AgentMessage result = worker.executeWithContext(taskMsg, context, stepOut);
 
         if (result.type() == AgentMessage.Type.ERROR) {
             updateStep(steps, step.id(), step.withFailed(result.content()));
-            out.println("❌ 步骤 [" + step.id() + "] 执行失败：" + result.content() + "\n");
+            stepOut.println("❌ 步骤 [" + step.id() + "] 执行失败：" + result.content() + "\n");
             return;
         }
         if (result.content() == null || result.content().isBlank()) {
             updateStep(steps, step.id(), step.withFailed("执行结果为空"));
-            out.println("❌ 步骤 [" + step.id() + "] 执行失败：结果为空\n");
+            stepOut.println("❌ 步骤 [" + step.id() + "] 执行失败：结果为空\n");
             return;
         }
 
-        out.println("🔍 " + reviewer.getName() + " 正在审查步骤 [" + step.id() + "] 的结果...");
-        AgentMessage reviewResult = reviewer.review(step.description(), result.content(), out);
+        stepOut.println("🔍 " + reviewer.getName() + " 正在审查步骤 [" + step.id() + "] 的结果...");
+        AgentMessage reviewResult = reviewer.review(step.description(), result.content(), stepOut);
         reviewer.clearHistory();
 
         if (reviewResult.type() == AgentMessage.Type.ERROR) {
             updateStep(steps, step.id(), step.withResult(result.content()));
-            out.println("⚠️ 步骤 [" + step.id() + "] 审查阶段失败，保留当前执行结果\n");
+            stepOut.println("⚠️ 步骤 [" + step.id() + "] 审查阶段失败，保留当前执行结果\n");
             return;
         }
 
@@ -305,7 +394,7 @@ public class AgentOrchestrator {
 
         if (approved) {
             updateStep(steps, step.id(), step.withResult(acceptedResult));
-            out.println("✅ 步骤 [" + step.id() + "] 审查通过\n");
+            stepOut.println("✅ 步骤 [" + step.id() + "] 审查通过\n");
             return;
         }
 
@@ -315,11 +404,11 @@ public class AgentOrchestrator {
         while (!approved && retries < MAX_RETRIES_PER_STEP) {
             retries++;
             retryCount.put(step.id(), retries);
-            out.println("⚠️ 步骤 [" + step.id() + "] 审查未通过，正在重新执行...");
-            out.println("   反馈: " + issues + "\n");
+            stepOut.println("⚠️ 步骤 [" + step.id() + "] 审查未通过，正在重新执行...");
+            stepOut.println("   反馈: " + issues + "\n");
 
             String feedbackContext = context + "\n\n之前的执行结果被审查拒绝，原因：\n" + issues;
-            AgentMessage retryResult = worker.executeWithContext(taskMsg, feedbackContext, out);
+            AgentMessage retryResult = worker.executeWithContext(taskMsg, feedbackContext, stepOut);
 
             if (retryResult.type() == AgentMessage.Type.ERROR) {
                 issues = "重试时 LLM 调用失败：" + retryResult.content();
@@ -334,7 +423,7 @@ public class AgentOrchestrator {
             }
 
             acceptedResult = retryResult.content();
-            AgentMessage retryReview = reviewer.review(step.description(), acceptedResult, out);
+            AgentMessage retryReview = reviewer.review(step.description(), acceptedResult, stepOut);
             reviewer.clearHistory();
 
             if (retryReview.type() == AgentMessage.Type.ERROR) {
@@ -348,13 +437,13 @@ public class AgentOrchestrator {
 
         updateStep(steps, step.id(), step.withResult(acceptedResult));
         if (approved) {
-            out.println("✅ 步骤 [" + step.id() + "] 重试后审查通过\n");
+            stepOut.println("✅ 步骤 [" + step.id() + "] 重试后审查通过\n");
         } else {
-            out.println("⚠️ 步骤 [" + step.id() + "] 超过最大重试次数，保留当前结果\n");
+            stepOut.println("⚠️ 步骤 [" + step.id() + "] 超过最大重试次数，保留当前结果\n");
         }
     }
 
-    private void updateStep(List<ExecutionStep> steps, String stepId, ExecutionStep updated) {
+    private synchronized void updateStep(List<ExecutionStep> steps, String stepId, ExecutionStep updated) {
         for (int i = 0; i < steps.size(); i++) {
             if (steps.get(i).id().equals(stepId)) {
                 steps.set(i, updated);
