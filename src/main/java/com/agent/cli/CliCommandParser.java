@@ -16,6 +16,7 @@ public final class CliCommandParser {
         SYSTEM,
         PWD,
         PLAN,
+        TEAM,
         SAVE,
         MEMORY_STATUS,
         MEMORY_LIST,
@@ -84,6 +85,7 @@ public final class CliCommandParser {
             case "/system" -> new ParsedCommand(CommandType.SYSTEM, payload);
             case "/pwd" -> new ParsedCommand(CommandType.PWD, payload);
             case "/plan" -> new ParsedCommand(CommandType.PLAN, payload);
+            case "/team" -> new ParsedCommand(CommandType.TEAM, payload);
             default -> trimmed.startsWith("/")
                     ? new ParsedCommand(CommandType.UNKNOWN, trimmed)
                     : ParsedCommand.none();

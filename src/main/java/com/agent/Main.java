@@ -24,6 +24,7 @@ public class Main {
 
     private static Agent agent;
     private static PlanExecuteAgent planAgent;
+    private static AgentOrchestrator teamAgent;
     private static ToolRegistry toolRegistry;
     private static LlmClient llmClient;
     private static BufferedReader inputReader;
@@ -75,6 +76,7 @@ public class Main {
             toolRegistry = new ToolRegistry(workspace);
             agent = new Agent(llmClient, toolRegistry);
             planAgent = new PlanExecuteAgent(llmClient, toolRegistry, Main::reviewPlan);
+            teamAgent = new AgentOrchestrator(llmClient, toolRegistry, agent.getMemoryManager());
 
             System.out.println("✓ Agent 初始化完成");
             System.out.println("✓ 可用工具: " + agent.getAvailableTools());
@@ -224,6 +226,7 @@ public class Main {
                 System.out.println("切换项目根请退出后重新启动，并指定 --workspace 或 AGENT_WORKSPACE。");
             }
             case PLAN -> executePlan(command.payload());
+            case TEAM -> executeTeam(command.payload());
             case SAVE -> handleSave(command.payload());
             case MEMORY_STATUS -> System.out.println(agent.getMemoryManager().getSystemStatus());
             case MEMORY_LIST -> printMemoryList(agent.getMemoryManager().listLongTerm());
@@ -284,6 +287,26 @@ public class Main {
                     entry.getId(),
                     entry.getContent(),
                     entry.getMetadata().getOrDefault("scope", "global"));
+        }
+    }
+
+    private static void executeTeam(String goal) {
+        if (goal == null || goal.isBlank()) {
+            System.out.println("请提供团队任务，例如: /team 审查并修复 AgentTest 里的一个断言问题");
+            return;
+        }
+
+        System.out.println("\n👥 使用 Multi-Agent 协作模式\n");
+        try {
+            long startTime = System.currentTimeMillis();
+            String response = teamAgent.run(goal);
+            long elapsed = System.currentTimeMillis() - startTime;
+
+            System.out.println("\n" + response);
+            System.out.printf("\n⏱️  耗时: %.1f 秒%n", elapsed / 1000.0);
+            printSeparator();
+        } catch (Exception e) {
+            System.err.println("\n❌ 团队协作失败: " + e.getMessage());
         }
     }
 
@@ -362,8 +385,8 @@ public class Main {
 
     private static void printBanner() {
         System.out.println("╔══════════════════════════════════════════════════════════════╗");
-        System.out.println("║     Agentic Coding Agent - Phase 3 MVP                     ║");
-        System.out.println("║     ReAct + Plan + Memory 智能编码助手                       ║");
+        System.out.println("║     Agentic Coding Agent - Phase 5 MVP                     ║");
+        System.out.println("║     ReAct + Plan + Memory + Multi-Agent 智能编码助手         ║");
         System.out.println("╚══════════════════════════════════════════════════════════════╝");
         System.out.println();
     }
@@ -377,6 +400,7 @@ public class Main {
         System.out.println("  /system       查看系统提示词");
         System.out.println("  /pwd          查看当前项目根");
         System.out.println("  /plan <任务>  使用 Plan-and-Execute 模式执行复杂任务");
+        System.out.println("  /team <任务>  使用 Multi-Agent 协作（规划/执行/审查）");
         System.out.println("  /save <事实>  手动保存长期记忆（/save --global 保存跨项目偏好）");
         System.out.println("  /memory       查看记忆系统状态");
         System.out.println("  /memory list/search/delete/clear  管理长期记忆");
@@ -390,8 +414,9 @@ public class Main {
         System.out.println();
         System.out.println("直接输入文本走 ReAct 模式，例如:");
         System.out.println("  \"读取当前目录的文件列表\"");
-        System.out.println("复杂多步任务请用 /plan，例如:");
+        System.out.println("复杂多步任务请用 /plan 或 /team，例如:");
         System.out.println("  /plan 创建 demo 项目，然后读取 pom.xml，最后验证项目结构");
+        System.out.println("  /team 审查并修复 AgentTest 里的一个断言问题");
     }
 
     private static void printSeparator() {
