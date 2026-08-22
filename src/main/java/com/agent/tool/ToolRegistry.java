@@ -12,6 +12,7 @@ import com.agent.web.SearchProvider;
 import com.agent.web.SearchProviderFactory;
 import com.agent.web.SearchResult;
 import com.agent.web.WebFetcher;
+import com.agent.mcp.protocol.McpToolDescriptor;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
@@ -29,10 +30,13 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.function.BiConsumer;
+import java.util.function.Function;
 import java.util.concurrent.Callable;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -54,6 +58,7 @@ public class ToolRegistry {
     private static final int DEFAULT_FETCH_MAX_CHARS = 8_000;
 
     private final Map<String, Tool> tools = new LinkedHashMap<>();
+    private final Map<String, McpRegisteredTool> mcpTools = new ConcurrentHashMap<>();
     private final long toolBatchTimeoutSeconds;
     private final AuditLog auditLog = new AuditLog();
     private Path workingDirectory;
@@ -96,6 +101,8 @@ public class ToolRegistry {
     }
 
     private record Param(String name, String type, String description, boolean required) {}
+
+    private record McpRegisteredTool(McpToolDescriptor descriptor, Function<String, String> invoker) {}
 
     public ToolRegistry() {
         this(Paths.get(System.getProperty("user.dir")));
@@ -462,6 +469,58 @@ public class ToolRegistry {
         log.debug("注册工具: {}", tool.name());
     }
 
+    public boolean hasTool(String toolName) {
+        return tools.containsKey(toolName);
+    }
+
+    public synchronized void registerMcpTool(McpToolDescriptor descriptor, Function<String, String> invoker) {
+        Objects.requireNonNull(descriptor, "descriptor");
+        Objects.requireNonNull(invoker, "invoker");
+        String toolName = descriptor.namespacedName();
+        mcpTools.put(toolName, new McpRegisteredTool(descriptor, invoker));
+        tools.put(toolName, new Tool(
+                toolName,
+                mcpDescription(descriptor),
+                descriptor.inputSchema(),
+                args -> "MCP 工具不应通过 Map<String,String> 入口执行"
+        ));
+        log.debug("注册 MCP 工具: {}", toolName);
+    }
+
+    public synchronized void unregisterMcpTool(String toolName) {
+        if (toolName == null || toolName.isBlank()) {
+            return;
+        }
+        mcpTools.remove(toolName);
+        tools.remove(toolName);
+    }
+
+    public synchronized void replaceMcpToolsForServer(String serverName, List<McpToolDescriptor> newTools,
+                                                      Function<McpToolDescriptor, Function<String, String>> invokerFactory) {
+        Objects.requireNonNull(serverName, "serverName");
+        Objects.requireNonNull(newTools, "newTools");
+        Objects.requireNonNull(invokerFactory, "invokerFactory");
+        String prefix = "mcp__" + serverName + "__";
+        List<String> existing = mcpTools.keySet().stream()
+                .filter(name -> name.startsWith(prefix))
+                .toList();
+        for (String toolName : existing) {
+            mcpTools.remove(toolName);
+            tools.remove(toolName);
+        }
+        for (McpToolDescriptor descriptor : newTools) {
+            registerMcpTool(descriptor, invokerFactory.apply(descriptor));
+        }
+    }
+
+    private static String mcpDescription(McpToolDescriptor descriptor) {
+        String description = descriptor.description();
+        if (description == null || description.isBlank()) {
+            return "MCP 工具 (" + descriptor.serverName() + "/" + descriptor.name() + ")";
+        }
+        return "[MCP:" + descriptor.serverName() + "] " + description;
+    }
+
     public List<LlmClient.Tool> getToolDefinitions() {
         return tools.values().stream()
                 .map(tool -> new LlmClient.Tool(tool.name(), tool.description(), tool.parameters()))
@@ -551,6 +610,19 @@ public class ToolRegistry {
                         System.currentTimeMillis() - startTime
                 );
             }
+
+            McpRegisteredTool mcpTool = mcpTools.get(invocation.name());
+            if (mcpTool != null) {
+                log.debug("执行 MCP 工具 {} with json args", invocation.name());
+                String result = mcpTool.invoker().apply(invocation.argumentsJson());
+                long elapsed = System.currentTimeMillis() - startTime;
+                if (ApprovalPolicyHelper.shouldAudit(invocation.name())) {
+                    auditLog.record(AuditLog.AuditEntry.allow(
+                            invocation.name(), invocation.argumentsJson(), elapsed));
+                }
+                return new ToolExecutionResult(invocation.id(), invocation.name(), result, elapsed);
+            }
+
             Map<String, String> args = parseArguments(invocation.argumentsJson());
             log.debug("执行工具 {} with args: {}", invocation.name(), args);
             String result = tool.executor().execute(args);
@@ -599,7 +671,8 @@ public class ToolRegistry {
         private static boolean shouldAudit(String toolName) {
             return "write_file".equals(toolName)
                     || "execute_command".equals(toolName)
-                    || "create_project".equals(toolName);
+                    || "create_project".equals(toolName)
+                    || (toolName != null && toolName.startsWith("mcp__"));
         }
     }
 

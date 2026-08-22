@@ -26,7 +26,8 @@ public final class CliCommandParser {
         MEMORY_LIST,
         MEMORY_SEARCH,
         MEMORY_DELETE,
-        MEMORY_CLEAR
+        MEMORY_CLEAR,
+        MCP_LIST
     }
 
     public record ParsedCommand(CommandType type, String payload) {
@@ -105,6 +106,7 @@ public final class CliCommandParser {
             case "/pwd" -> new ParsedCommand(CommandType.PWD, payload);
             case "/plan" -> new ParsedCommand(CommandType.PLAN, payload);
             case "/team" -> new ParsedCommand(CommandType.TEAM, payload);
+            case "/mcp" -> new ParsedCommand(CommandType.MCP_LIST, payload);
             default -> trimmed.startsWith("/")
                     ? new ParsedCommand(CommandType.UNKNOWN, trimmed)
                     : ParsedCommand.none();

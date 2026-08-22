@@ -17,6 +17,9 @@ public final class ApprovalPolicy {
     }
 
     public static boolean requiresApproval(String toolName) {
+        if (toolName != null && toolName.startsWith("mcp__")) {
+            return true;
+        }
         return DANGEROUS_TOOLS.contains(toolName);
     }
 
@@ -25,6 +28,9 @@ public final class ApprovalPolicy {
     }
 
     public static String getDangerLevel(String toolName) {
+        if (toolName != null && toolName.startsWith("mcp__")) {
+            return "🟡 中危";
+        }
         return switch (toolName) {
             case "execute_command" -> "🔴 高危";
             case "write_file", "create_project" -> "🟡 中危";
@@ -33,6 +39,9 @@ public final class ApprovalPolicy {
     }
 
     public static String getRiskDescription(String toolName) {
+        if (toolName != null && toolName.startsWith("mcp__")) {
+            return "将调用外部 MCP server 提供的工具，可能访问本地或远程资源";
+        }
         return switch (toolName) {
             case "execute_command" -> "将在系统上执行 Shell 命令，可能修改文件或影响系统状态";
             case "write_file" -> "将写入或覆盖文件内容，原有内容将丢失";

@@ -20,6 +20,7 @@
 8. `save_memory` - 在用户明确要求“记一下/记住/以后记得”时保存长期记忆，默认 `scope=project`
 9. `web_search` - 搜索互联网获取实时信息（最新版本、官方文档、技术资讯等）
 10. `web_fetch` - 抓取已知 URL 并提取正文 Markdown
+11. `mcp__{server}__{tool}` - MCP server 动态提供的外部工具，具体参数以工具 schema 为准
 
 ## Tool Policy
 
@@ -36,6 +37,12 @@
 - 已有明确 URL 且需要阅读全文时，用 `web_fetch` 抓取正文。
 - `web_fetch` 适用于静态/SSR 页面；若返回空正文，说明可能是 JS 渲染页，告知用户边界即可，不要反复重试同一 URL。
 - 搜索到有用链接后，可再用 `web_fetch` 深入阅读；本地代码问题仍优先 `glob_files` / `grep_code`。
+
+## MCP Policy
+
+- MCP 工具来自外部 server，默认会触发 HITL 审批与审计；除非任务确实需要该 server 能力，否则优先使用内置工具。
+- MCP 工具名格式为 `mcp__{server}__{tool}`，参数 schema 以工具定义为准。
+- 配置文件：`~/.agent/mcp.json` 或项目 `.agent/mcp.json`；用 `/mcp` 查看 server 状态。
 
 ## Memory Policy
 

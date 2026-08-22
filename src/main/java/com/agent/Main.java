@@ -12,6 +12,7 @@ import com.agent.memory.MemoryEntry;
 import com.agent.memory.MemoryManager;
 import com.agent.plan.ExecutionPlan;
 import com.agent.policy.AuditLog;
+import com.agent.mcp.McpServerManager;
 import com.agent.tool.ToolRegistry;
 import com.agent.web.SearchProvider;
 import com.agent.web.SearchProviderFactory;
@@ -31,6 +32,7 @@ public class Main {
     private static PlanExecuteAgent planAgent;
     private static AgentOrchestrator teamAgent;
     private static ToolRegistry toolRegistry;
+    private static McpServerManager mcpServerManager;
     private static TerminalHitlHandler hitlHandler;
     private static LlmClient llmClient;
     private static BufferedReader inputReader;
@@ -81,6 +83,14 @@ public class Main {
             llmClient = new SimpleLlmClient(apiUrl, apiKey, model);
             hitlHandler = new TerminalHitlHandler(false);
             toolRegistry = new HitlToolRegistry(hitlHandler, workspace);
+            mcpServerManager = new McpServerManager(toolRegistry, workspace);
+            startMcpServers();
+            Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+                if (mcpServerManager != null) {
+                    mcpServerManager.close();
+                }
+            }, "agent-mcp-shutdown"));
+
             agent = new Agent(llmClient, toolRegistry);
             planAgent = new PlanExecuteAgent(llmClient, toolRegistry, Main::reviewPlan);
             teamAgent = new AgentOrchestrator(llmClient, toolRegistry, agent.getMemoryManager());
@@ -248,6 +258,7 @@ public class Main {
                 agent.getMemoryManager().clearLongTerm();
                 System.out.println("✓ 长期记忆已清空");
             }
+            case MCP_LIST -> System.out.println(mcpServerManager.formatStatus());
             case UNKNOWN -> System.out.println("未知命令: " + command.payload() + "，输入 /help 查看所有命令");
             default -> {
             }
@@ -312,8 +323,22 @@ public class Main {
 
     private static void printHitlStatus() {
         System.out.println("HITL 状态: " + (hitlHandler.isEnabled() ? "开启" : "关闭"));
-        System.out.println("危险工具: write_file / execute_command / create_project");
+        System.out.println("危险工具: write_file / execute_command / create_project / mcp__*");
         System.out.println("用法: /hitl on | /hitl off");
+    }
+
+    private static void startMcpServers() {
+        try {
+            mcpServerManager.loadConfiguredServers();
+            if (mcpServerManager.servers().isEmpty()) {
+                System.out.println("🔌 MCP: 未配置 server（可选 ~/.agent/mcp.json）");
+                return;
+            }
+            mcpServerManager.startAll();
+            System.out.println(mcpServerManager.startupSummary());
+        } catch (Exception e) {
+            System.out.println("⚠️  MCP 启动失败: " + e.getMessage());
+        }
     }
 
     private static void printAudit(String payload) {
@@ -468,6 +493,7 @@ public class Main {
         System.out.println("  /save <事实>  手动保存长期记忆（/save --global 保存跨项目偏好）");
         System.out.println("  /memory       查看记忆系统状态");
         System.out.println("  /memory list/search/delete/clear  管理长期记忆");
+        System.out.println("  /mcp          查看 MCP server 状态");
         System.out.println("  /exit         退出程序");
         System.out.println();
         System.out.println("项目根在启动时确定（对齐 PaiCLI，运行中不可通过 Agent 切换）:");

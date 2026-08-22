@@ -18,6 +18,7 @@ class CliCommandParserTest {
         assertEquals(CliCommandParser.CommandType.AUDIT, CliCommandParser.parse("/audit 5").type());
         assertEquals(CliCommandParser.CommandType.SAVE, CliCommandParser.parse("/save fact").type());
         assertEquals(CliCommandParser.CommandType.MEMORY_LIST, CliCommandParser.parse("/memory list").type());
+        assertEquals(CliCommandParser.CommandType.MCP_LIST, CliCommandParser.parse("/mcp").type());
     }
 
     @Test
