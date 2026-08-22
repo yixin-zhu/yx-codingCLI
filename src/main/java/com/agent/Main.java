@@ -250,6 +250,10 @@ public class Main {
             case HITL_OFF -> setHitlEnabled(false);
             case AUDIT -> printAudit(command.payload());
             case SAVE -> handleSave(command.payload());
+            case CONTEXT_STATUS -> {
+                System.out.println("📋 上下文状态：");
+                System.out.println(agent.getContextStatus());
+            }
             case MEMORY_STATUS -> System.out.println(agent.getMemoryManager().getSystemStatus());
             case MEMORY_LIST -> printMemoryList(agent.getMemoryManager().listLongTerm());
             case MEMORY_SEARCH -> handleMemorySearch(command.payload());
@@ -500,6 +504,7 @@ public class Main {
         System.out.println("  /hitl on|off  开启/关闭危险工具人工审批（默认关闭）");
         System.out.println("  /audit [N]    查看今日最近 N 条审计记录");
         System.out.println("  /save <事实>  手动保存长期记忆（/save --global 保存跨项目偏好）");
+        System.out.println("  /context      查看上下文窗口、压缩阈值与占用");
         System.out.println("  /memory       查看记忆系统状态");
         System.out.println("  /memory list/search/delete/clear  管理长期记忆");
         System.out.println("  /mcp          查看 MCP server 状态");

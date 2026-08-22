@@ -1,8 +1,10 @@
 package com.agent;
 
+import com.agent.context.ContextProfile;
 import com.agent.llm.LlmClient;
 import com.agent.memory.ConversationHistoryCompactor;
 import com.agent.memory.MemoryManager;
+import com.agent.memory.TokenBudget;
 import com.agent.project.AgentMdLoader;
 import com.agent.prompt.PromptAssembler;
 import com.agent.prompt.PromptContext;
@@ -62,7 +64,7 @@ public class Agent {
         updateSystemPromptWithMemory(userInput);
         conversationHistory.add(LlmClient.Message.user(userInput));
 
-        AgentBudget budget = AgentBudget.defaults();
+        AgentBudget budget = AgentBudget.fromLlmClient(llmClient);
 
         while (true) {
             AgentBudget.ExitReason exitReason = budget.check();
@@ -80,8 +82,8 @@ public class Agent {
                         conversationHistory,
                         toolRegistry.getToolDefinitions()
                 );
-                budget.recordTokens(response.inputTokens(), response.outputTokens());
-                memoryManager.recordTokenUsage(response.inputTokens(), response.outputTokens());
+                budget.recordTokens(response.inputTokens(), response.outputTokens(), response.cachedInputTokens());
+                memoryManager.recordTokenUsage(response.inputTokens(), response.outputTokens(), response.cachedInputTokens());
 
                 conversationHistory.add(LlmClient.Message.assistant(
                         response.content(),
@@ -126,6 +128,67 @@ public class Agent {
         log.info("对话历史已重置");
     }
 
+    public String getContextStatus() {
+        ContextProfile profile = memoryManager.getContextProfile();
+        int window = profile.maxContextWindow();
+        int triggerTokens = profile.compressionTriggerTokens();
+
+        int systemTokens = 0;
+        int userTokens = 0;
+        int assistantTokens = 0;
+        int toolTokens = 0;
+        int systemCount = 0;
+        int userCount = 0;
+        int assistantCount = 0;
+        int toolCount = 0;
+        for (LlmClient.Message msg : conversationHistory) {
+            int tokens = TokenBudget.estimateMessagesTokens(List.of(msg));
+            switch (msg.role()) {
+                case "system" -> {
+                    systemTokens += tokens;
+                    systemCount++;
+                }
+                case "user" -> {
+                    userTokens += tokens;
+                    userCount++;
+                }
+                case "assistant" -> {
+                    assistantTokens += tokens;
+                    assistantCount++;
+                }
+                case "tool" -> {
+                    toolTokens += tokens;
+                    toolCount++;
+                }
+                default -> {
+                }
+            }
+        }
+        int messagesTokens = userTokens + assistantTokens + toolTokens;
+        int toolsSchemaTokens = estimateToolsSchemaTokens();
+        int total = systemTokens + messagesTokens + toolsSchemaTokens;
+        double ratio = window > 0 ? (double) total / window : 0;
+        int triggerRemaining = Math.max(0, triggerTokens - total);
+
+        StringBuilder sb = new StringBuilder();
+        sb.append(String.format("模型: %s (%s)   window: %,d%n",
+                llmClient.getModelName(), llmClient.getProviderName(), window));
+        sb.append(String.format("上下文占用: %,d / %,d (%.1f%%)%n", total, window, ratio * 100));
+        sb.append(String.format("  System prompt: %,d (%d 条)%n", systemTokens, systemCount));
+        sb.append(String.format("  Tools schema:  %,d%n", toolsSchemaTokens));
+        sb.append(String.format("  Conversation:  %,d (%d 条: user=%d assistant=%d tool=%d)%n",
+                messagesTokens, userCount + assistantCount + toolCount, userCount, assistantCount, toolCount));
+        sb.append(String.format("压缩阈值: %,d (%d%%)   距压缩还有: %,d%n",
+                triggerTokens, (int) (profile.compressionTriggerRatio() * 100), triggerRemaining));
+        sb.append("MCP resource 自动索引: ")
+                .append(profile.mcpResourceIndexEnabled() ? "开启" : "关闭（window 不足 32k）")
+                .append("\n");
+        sb.append("prompt cache: ").append(profile.promptCacheMode()).append("\n");
+        sb.append("Agent 软提示预算: ").append(profile.agentTokenBudget()).append("\n");
+        sb.append("\n").append(memoryManager.getSystemStatus());
+        return sb.toString();
+    }
+
     public MemoryManager getMemoryManager() {
         return memoryManager;
     }
@@ -149,7 +212,7 @@ public class Agent {
     private void updateSystemPromptWithMemory(String userInput) {
         String memoryContext = memoryManager.buildContextForQuery(
                 userInput,
-                memoryManager.getTokenBudget().getMemoryContextTokens()
+                memoryManager.getContextProfile().memoryContextTokens()
         );
         this.systemPrompt = assembleSystemPrompt(toolRegistry.getProjectPath(), memoryContext);
         if (!conversationHistory.isEmpty() && "system".equals(conversationHistory.get(0).role())) {
@@ -169,10 +232,19 @@ public class Agent {
     }
 
     private void maybeCompactHistory() {
-        int trigger = memoryManager.getTokenBudget().getCompressionTriggerTokens();
+        int trigger = memoryManager.getContextProfile().compressionTriggerTokens();
         boolean compacted = historyCompactor.compactIfNeeded(conversationHistory, trigger);
         if (compacted) {
-            log.info("conversationHistory 已压缩");
+            log.info("conversationHistory 已压缩（阈值 {} tokens）", trigger);
+        }
+    }
+
+    private int estimateToolsSchemaTokens() {
+        try {
+            return com.agent.memory.MemoryEntry.estimateTokens(
+                    LlmClient.MAPPER.writeValueAsString(toolRegistry.getToolDefinitions()));
+        } catch (Exception e) {
+            return 0;
         }
     }
 }

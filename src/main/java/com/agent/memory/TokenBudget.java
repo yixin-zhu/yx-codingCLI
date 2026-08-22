@@ -18,6 +18,7 @@ public class TokenBudget {
 
     private int totalInputTokens;
     private int totalOutputTokens;
+    private int totalCachedInputTokens;
     private int llmCallCount;
 
     public TokenBudget(int contextWindow) {
@@ -45,29 +46,43 @@ public class TokenBudget {
     }
 
     public void recordUsage(int inputTokens, int outputTokens) {
+        recordUsage(inputTokens, outputTokens, 0);
+    }
+
+    public void recordUsage(int inputTokens, int outputTokens, int cachedInputTokens) {
         totalInputTokens += inputTokens;
         totalOutputTokens += outputTokens;
+        totalCachedInputTokens += Math.max(0, cachedInputTokens);
         llmCallCount++;
     }
 
-    public int getCompressionTriggerTokens() {
-        return (int) (getAvailableForConversation() * 0.835);
-    }
-
-    public int getMemoryContextTokens() {
-        return 2_048;
-    }
-
     public String getUsageReport() {
+        double avgInput = llmCallCount > 0 ? (double) totalInputTokens / llmCallCount : 0;
         return String.format(
-                "Token 统计: 调用 %d 次 | 总输入: %d | 总输出: %d | 预算: %d (可用: %d)",
-                llmCallCount, totalInputTokens, totalOutputTokens,
+                "Token 统计: 调用 %d 次 | 总输入: %d | 总输出: %d | cached: %d | 平均输入: %.0f | 预算: %d (可用: %d)",
+                llmCallCount, totalInputTokens, totalOutputTokens, totalCachedInputTokens, avgInput,
                 contextWindow, getAvailableForConversation()
         );
     }
 
     public int getContextWindow() {
         return contextWindow;
+    }
+
+    public int getTotalInputTokens() {
+        return totalInputTokens;
+    }
+
+    public int getTotalOutputTokens() {
+        return totalOutputTokens;
+    }
+
+    public int getTotalCachedInputTokens() {
+        return totalCachedInputTokens;
+    }
+
+    public int getLlmCallCount() {
+        return llmCallCount;
     }
 
     public static int estimateMessagesTokens(List<LlmClient.Message> messages) {

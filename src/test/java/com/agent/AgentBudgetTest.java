@@ -38,6 +38,27 @@ class AgentBudgetTest {
     }
 
     @Test
+    void tokenBudgetExceededWhenHardLimitSet() {
+        AgentBudget budget = new AgentBudget(100, 3, 50);
+        budget.recordTokens(60, 50);
+        assertEquals(AgentBudget.ExitReason.TOKEN_BUDGET_EXCEEDED, budget.check());
+    }
+
+    @Test
+    void cachedTokensAccumulated() {
+        AgentBudget budget = AgentBudget.defaults();
+        budget.recordTokens(100, 20, 40);
+        assertEquals(40, budget.totalCachedInputTokens());
+    }
+
+    @Test
+    void fromLlmClientUsesUnlimitedTokenBudgetByDefault() {
+        AgentBudget budget = AgentBudget.fromLlmClient(null);
+        budget.recordTokens(1_000_000, 1_000_000);
+        assertEquals(AgentBudget.ExitReason.WITHIN_BUDGET, budget.check());
+    }
+
+    @Test
     void invalidConstructorArgumentsRejected() {
         assertThrows(IllegalArgumentException.class, () -> new AgentBudget(1, 50));
         assertThrows(IllegalArgumentException.class, () -> new AgentBudget(3, 0));

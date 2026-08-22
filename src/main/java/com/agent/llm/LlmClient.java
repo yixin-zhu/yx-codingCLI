@@ -69,11 +69,37 @@ public interface LlmClient {
             String content,
             List<ToolCall> toolCalls,
             int inputTokens,
-            int outputTokens
+            int outputTokens,
+            int cachedInputTokens
     ) {
+        public ChatResponse(String role, String content, List<ToolCall> toolCalls,
+                            int inputTokens, int outputTokens) {
+            this(role, content, toolCalls, inputTokens, outputTokens, 0);
+        }
+
         public boolean hasToolCalls() {
             return toolCalls != null && !toolCalls.isEmpty();
         }
+    }
+
+    default String getModelName() {
+        return "unknown";
+    }
+
+    default String getProviderName() {
+        return "unknown";
+    }
+
+    default int maxContextWindow() {
+        return 128_000;
+    }
+
+    default boolean supportsPromptCaching() {
+        return false;
+    }
+
+    default String promptCacheMode() {
+        return "none";
     }
 
     // ==================== 接口方法 ====================

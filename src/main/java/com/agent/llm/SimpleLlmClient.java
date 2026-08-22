@@ -29,12 +29,41 @@ public class SimpleLlmClient implements LlmClient {
     public SimpleLlmClient(String apiUrl, String apiKey, String model) {
         this.apiUrl = apiUrl;
         this.apiKey = apiKey;
-        this.model = model;
+        this.model = model != null && !model.isBlank() ? model : "deepseek-chat";
         this.httpClient = new OkHttpClient.Builder()
                 .connectTimeout(30, TimeUnit.SECONDS)
                 .readTimeout(120, TimeUnit.SECONDS)
                 .writeTimeout(30, TimeUnit.SECONDS)
                 .build();
+    }
+
+    @Override
+    public String getModelName() {
+        return model;
+    }
+
+    @Override
+    public String getProviderName() {
+        return "deepseek";
+    }
+
+    @Override
+    public int maxContextWindow() {
+        String normalized = model.toLowerCase();
+        if (normalized.contains("v4") || normalized.contains("1m") || normalized.contains("million")) {
+            return 1_000_000;
+        }
+        return 128_000;
+    }
+
+    @Override
+    public boolean supportsPromptCaching() {
+        return true;
+    }
+
+    @Override
+    public String promptCacheMode() {
+        return "automatic-prefix-cache";
     }
 
     @Override
@@ -151,16 +180,26 @@ public class SimpleLlmClient implements LlmClient {
         // 解析 token usage
         int inputTokens = 0;
         int outputTokens = 0;
+        int cachedInputTokens = 0;
         if (root.has("usage")) {
             JsonNode usage = root.get("usage");
             inputTokens = usage.has("prompt_tokens") ? usage.get("prompt_tokens").asInt() : 0;
             outputTokens = usage.has("completion_tokens") ? usage.get("completion_tokens").asInt() : 0;
+            if (usage.has("prompt_tokens_details")) {
+                JsonNode details = usage.get("prompt_tokens_details");
+                if (details.has("cached_tokens")) {
+                    cachedInputTokens = details.get("cached_tokens").asInt();
+                }
+            }
+            if (cachedInputTokens == 0 && usage.has("prompt_cache_hit_tokens")) {
+                cachedInputTokens = usage.get("prompt_cache_hit_tokens").asInt();
+            }
         }
 
         // 解析 choice
         JsonNode choices = root.get("choices");
         if (choices == null || choices.isEmpty()) {
-            return new ChatResponse("assistant", "", List.of(), inputTokens, outputTokens);
+            return new ChatResponse("assistant", "", List.of(), inputTokens, outputTokens, cachedInputTokens);
         }
 
         JsonNode choice = choices.get(0);
@@ -183,6 +222,6 @@ public class SimpleLlmClient implements LlmClient {
             }
         }
 
-        return new ChatResponse(role, content, toolCalls, inputTokens, outputTokens);
+        return new ChatResponse(role, content, toolCalls, inputTokens, outputTokens, cachedInputTokens);
     }
 }

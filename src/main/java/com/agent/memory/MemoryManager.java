@@ -1,5 +1,6 @@
 package com.agent.memory;
 
+import com.agent.context.ContextProfile;
 import com.agent.llm.LlmClient;
 
 import java.nio.file.Path;
@@ -13,30 +14,50 @@ import org.slf4j.LoggerFactory;
 public class MemoryManager {
 
     private static final Logger log = LoggerFactory.getLogger(MemoryManager.class);
-    private static final int DEFAULT_SHORT_TERM_BUDGET = 32_768;
-    private static final double COMPRESSION_TRIGGER_RATIO = 0.9;
 
     private final ConversationMemory shortTermMemory;
     private final LongTermMemory longTermMemory;
     private final ContextCompressor compressor;
     private final MemoryRetriever retriever;
-    private final TokenBudget tokenBudget;
+    private TokenBudget tokenBudget;
+    private ContextProfile contextProfile;
     private String currentProject = defaultProjectKey();
 
     public MemoryManager(LlmClient llmClient) {
-        this(llmClient, DEFAULT_SHORT_TERM_BUDGET, TokenBudget.defaults(), null);
+        this(llmClient, ContextProfile.from(llmClient), null);
     }
 
+    public MemoryManager(LlmClient llmClient, int shortTermBudget, int contextWindow, LongTermMemory longTermMemory) {
+        this(llmClient, ContextProfile.custom(contextWindow, shortTermBudget), longTermMemory);
+    }
+
+    /** 兼容测试：从 TokenBudget 推断 context window */
     public MemoryManager(LlmClient llmClient, int shortTermBudget, TokenBudget tokenBudget, LongTermMemory longTermMemory) {
-        this.shortTermMemory = new ConversationMemory(shortTermBudget);
+        this(llmClient,
+                ContextProfile.custom(
+                        tokenBudget != null ? tokenBudget.getContextWindow() : 128_000,
+                        shortTermBudget),
+                longTermMemory);
+    }
+
+    private MemoryManager(LlmClient llmClient, ContextProfile contextProfile, LongTermMemory longTermMemory) {
+        this.contextProfile = contextProfile;
+        this.shortTermMemory = new ConversationMemory(contextProfile.shortTermMemoryBudget());
         this.longTermMemory = longTermMemory != null ? longTermMemory : new LongTermMemory();
         this.compressor = new ContextCompressor(llmClient);
         this.retriever = new MemoryRetriever(this.longTermMemory);
-        this.tokenBudget = tokenBudget != null ? tokenBudget : TokenBudget.defaults();
+        this.tokenBudget = new TokenBudget(contextProfile.maxContextWindow());
     }
 
     public void setLlmClient(LlmClient llmClient) {
         this.compressor.setLlmClient(llmClient);
+        applyContextProfile(ContextProfile.from(llmClient));
+    }
+
+    public void applyContextProfile(ContextProfile contextProfile) {
+        this.contextProfile = contextProfile;
+        this.tokenBudget = new TokenBudget(contextProfile.maxContextWindow());
+        this.shortTermMemory.setMaxTokens(contextProfile.shortTermMemoryBudget());
     }
 
     public void setProjectPath(String projectPath) {
@@ -104,15 +125,25 @@ public class MemoryManager {
     }
 
     public void recordTokenUsage(int inputTokens, int outputTokens) {
-        tokenBudget.recordUsage(inputTokens, outputTokens);
+        recordTokenUsage(inputTokens, outputTokens, 0);
+    }
+
+    public void recordTokenUsage(int inputTokens, int outputTokens, int cachedInputTokens) {
+        tokenBudget.recordUsage(inputTokens, outputTokens, cachedInputTokens);
     }
 
     public boolean compressIfNeeded() {
-        if (!tokenBudget.needsCompression(shortTermMemory, COMPRESSION_TRIGGER_RATIO)) {
+        if (!tokenBudget.needsCompression(shortTermMemory, contextProfile.compressionTriggerRatio())) {
             return false;
         }
-        log.info("短期记忆达到压缩阈值，开始压缩");
+        int beforeTokens = shortTermMemory.getTokenCount();
+        log.info("上下文占用达到压缩阈值（{}%），触发短期记忆压缩",
+                (int) (contextProfile.compressionTriggerRatio() * 100));
         String summary = compressor.compress(shortTermMemory);
+        if (summary != null) {
+            int afterTokens = shortTermMemory.getTokenCount();
+            log.info("短期记忆压缩完成: {} -> {} tokens", beforeTokens, afterTokens);
+        }
         return summary != null;
     }
 
@@ -121,7 +152,8 @@ public class MemoryManager {
     }
 
     public String getSystemStatus() {
-        return shortTermMemory.getStatusSummary() + "\n"
+        return "上下文策略: " + contextProfile.summary() + "\n"
+                + shortTermMemory.getStatusSummary() + "\n"
                 + longTermMemory.getStatusSummary() + "\n"
                 + tokenBudget.getUsageReport();
     }
@@ -136,6 +168,10 @@ public class MemoryManager {
 
     public TokenBudget getTokenBudget() {
         return tokenBudget;
+    }
+
+    public ContextProfile getContextProfile() {
+        return contextProfile;
     }
 
     public String getCurrentProject() {

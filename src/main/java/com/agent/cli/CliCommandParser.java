@@ -22,6 +22,7 @@ public final class CliCommandParser {
         HITL_OFF,
         AUDIT,
         SAVE,
+        CONTEXT_STATUS,
         MEMORY_STATUS,
         MEMORY_LIST,
         MEMORY_SEARCH,
@@ -50,6 +51,9 @@ public final class CliCommandParser {
         }
 
         String lower = trimmed.toLowerCase();
+        if (lower.equals("/context") || lower.equals("/ctx")) {
+            return new ParsedCommand(CommandType.CONTEXT_STATUS, null);
+        }
         if (lower.equals("/memory") || lower.equals("/mem")) {
             return new ParsedCommand(CommandType.MEMORY_STATUS, null);
         }
